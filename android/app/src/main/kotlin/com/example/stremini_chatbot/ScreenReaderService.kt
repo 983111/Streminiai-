@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.drawable.GradientDrawable
 import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
@@ -34,9 +35,7 @@ class ScreenReaderService : AccessibilityService() {
         private const val TAG = "ScreenReaderService"
         private var instance: ScreenReaderService? = null
         
-        fun isRunning(context: android.content.Context? = null): Boolean {
-            return instance != null
-        }
+        fun isRunning(): Boolean = instance != null
     }
 
     private lateinit var windowManager: WindowManager
@@ -49,20 +48,17 @@ class ScreenReaderService : AccessibilityService() {
     
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     
-    // Overlay views
     private var scanningOverlay: View? = null
     private var tagsContainer: FrameLayout? = null
     private var isScanning = false
     private var tagsVisible = false
 
-    // Store detected content with positions
     data class ContentWithPosition(
         val text: String,
         val bounds: Rect,
         val nodeInfo: String
     )
 
-    // Store tag information for click handling
     data class TagInfo(
         val text: String,
         val color: Int,
@@ -75,13 +71,11 @@ class ScreenReaderService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        Log.d(TAG, "✅ Screen Reader Service Connected - Works over ALL apps")
+        Log.d(TAG, "✅ Screen Reader Service Connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            Log.d(TAG, "Window changed: ${event.packageName}")
-        }
+        // Monitor window changes
     }
 
     override fun onInterrupt() {
@@ -101,63 +95,44 @@ class ScreenReaderService : AccessibilityService() {
         
         when (intent?.action) {
             ACTION_START_SCAN -> {
-                Log.d(TAG, "START_SCAN received")
                 if (tagsVisible) {
-                    // If tags are visible, hide them (toggle off)
-                    Log.d(TAG, "Tags already visible - clearing them")
                     clearTags()
                 } else if (!isScanning) {
-                    // If not scanning and tags not visible, start new scan
                     startScreenScan()
-                } else {
-                    Log.d(TAG, "Already scanning")
                 }
             }
-            ACTION_STOP_SCAN -> {
-                Log.d(TAG, "STOP_SCAN received")
-                clearAllOverlays()
-            }
+            ACTION_STOP_SCAN -> clearAllOverlays()
         }
         return START_NOT_STICKY
     }
 
     private fun startScreenScan() {
-        Log.d(TAG, "🔍 Starting screen scan - scanning ANY active app...")
+        Log.d(TAG, "🔍 Starting screen scan")
         isScanning = true
         showScanningAnimation()
         
         serviceScope.launch {
             try {
-                delay(1500) // Scanning animation
+                delay(1500)
                 
                 val rootNode = rootInActiveWindow
                 if (rootNode == null) {
-                    Log.e(TAG, "❌ Cannot access screen - rootInActiveWindow is null")
-                    showError("Cannot access screen content. Please ensure accessibility permission is granted.")
+                    Log.e(TAG, "❌ Cannot access screen")
+                    showError("Cannot access screen. Ensure accessibility permission is granted.")
                     return@launch
                 }
-                
-                val packageName = rootNode.packageName?.toString() ?: "unknown"
-                Log.d(TAG, "✅ Scanning app: $packageName")
                 
                 val contentList = mutableListOf<ContentWithPosition>()
                 extractContentWithPositions(rootNode, contentList)
                 rootNode.recycle()
                 
-                Log.d(TAG, "📋 Extracted ${contentList.size} content items from $packageName")
-                
                 if (contentList.isEmpty()) {
-                    showInfo("Screen appears empty - no analyzable content found.")
+                    showInfo("No content found to analyze")
                     return@launch
                 }
                 
                 val fullText = contentList.joinToString("\n") { it.text }
-                Log.d(TAG, "Text preview: ${fullText.take(200)}...")
-                
-                Log.d(TAG, "🌐 Sending to backend for analysis...")
                 val result = analyzeScreenContent(fullText)
-                
-                Log.d(TAG, "✅ Analysis complete: isSafe=${result.isSafe}, tags=${result.tags.size}")
                 
                 hideScanningAnimation()
                 displayTagsNearContent(contentList, result)
@@ -165,9 +140,9 @@ class ScreenReaderService : AccessibilityService() {
                 isScanning = false
                 tagsVisible = true
                 
-                val completeIntent = Intent(ACTION_SCAN_COMPLETE)
-                completeIntent.putExtra(EXTRA_SCANNED_TEXT, "Scan complete")
-                sendBroadcast(completeIntent)
+                sendBroadcast(Intent(ACTION_SCAN_COMPLETE).apply {
+                    putExtra(EXTRA_SCANNED_TEXT, "Scan complete")
+                })
                 
             } catch (e: Exception) {
                 Log.e(TAG, "❌ Scan failed", e)
@@ -193,25 +168,19 @@ class ScreenReaderService : AccessibilityService() {
                     val nodeInfo = buildString {
                         append(node.className?.toString()?.substringAfterLast('.') ?: "Unknown")
                         if (node.isClickable) append(" [Clickable]")
-                        if (node.isCheckable) append(" [Checkable]")
                     }
-                    
                     contentList.add(ContentWithPosition(text, bounds, nodeInfo))
                 }
             }
             
             for (i in 0 until node.childCount) {
-                try {
-                    node.getChild(i)?.let { 
-                        extractContentWithPositions(it, contentList)
-                        it.recycle()
-                    }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Error traversing child node: ${e.message}")
+                node.getChild(i)?.let { 
+                    extractContentWithPositions(it, contentList)
+                    it.recycle()
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Error extracting content: ${e.message}")
+            Log.w(TAG, "Error extracting: ${e.message}")
         }
     }
 
@@ -232,40 +201,22 @@ class ScreenReaderService : AccessibilityService() {
     )
 
     private suspend fun analyzeScreenContent(content: String): ScanResult = withContext(Dispatchers.IO) {
-        Log.d(TAG, "🔄 Building API request...")
-        
         try {
-            val requestJson = JSONObject().apply {
+            val requestBody = JSONObject().apply {
                 put("content", content.take(5000))
-            }
-
-            val requestBody = requestJson.toString()
-                .toRequestBody("application/json".toMediaType())
-
-            Log.d(TAG, "📤 Sending request to /security/scan-content...")
+            }.toString().toRequestBody("application/json".toMediaType())
 
             val request = Request.Builder()
                 .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/security/scan-content")
                 .post(requestBody)
                 .addHeader("Content-Type", "application/json")
-                .addHeader("Accept", "application/json")
                 .build()
 
             val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() 
-                ?: throw IOException("Empty response from server")
-
-            Log.d(TAG, "📥 Response code: ${response.code}")
+            val responseBody = response.body?.string() ?: throw IOException("Empty response")
 
             if (!response.isSuccessful) {
-                Log.e(TAG, "❌ API Error: ${response.code}")
-                return@withContext ScanResult(
-                    isSafe = true,
-                    riskLevel = "safe",
-                    tags = listOf("Analysis Error"),
-                    analysis = "Unable to connect to security service.",
-                    flaggedItems = emptyList()
-                )
+                return@withContext ScanResult(true, "safe", emptyList(), "Unable to connect", emptyList())
             }
 
             val json = JSONObject(responseBody)
@@ -274,59 +225,25 @@ class ScreenReaderService : AccessibilityService() {
             val analysis = json.optString("analysis", "Content analyzed")
             
             val tagsArray = json.optJSONArray("tags") ?: JSONArray()
-            val tags = mutableListOf<String>()
-            for (i in 0 until tagsArray.length()) {
-                tags.add(tagsArray.getString(i))
-            }
+            val tags = (0 until tagsArray.length()).map { tagsArray.getString(it) }
 
-            // Parse flaggedItems
             val flaggedItemsArray = json.optJSONArray("flaggedItems") ?: JSONArray()
-            val flaggedItems = mutableListOf<FlaggedItem>()
-            for (i in 0 until flaggedItemsArray.length()) {
+            val flaggedItems = (0 until flaggedItemsArray.length()).map { i ->
                 val item = flaggedItemsArray.getJSONObject(i)
-                flaggedItems.add(
-                    FlaggedItem(
-                        type = item.optString("type", "message"),
-                        content = item.optString("content", ""),
-                        threat = item.optString("threat", "Unknown"),
-                        severity = item.optString("severity", "medium"),
-                        reason = item.optString("reason", "Suspicious pattern detected")
-                    )
+                FlaggedItem(
+                    type = item.optString("type", "message"),
+                    content = item.optString("content", ""),
+                    threat = item.optString("threat", "Unknown"),
+                    severity = item.optString("severity", "medium"),
+                    reason = item.optString("reason", "Suspicious pattern")
                 )
             }
 
-            if (tags.isEmpty() && !isSafe) {
-                tags.add("Review Recommended")
-            }
-
-            Log.d(TAG, "✅ Parsed result: isSafe=$isSafe, riskLevel=$riskLevel, tags=${tags.size}, flaggedItems=${flaggedItems.size}")
-
-            return@withContext ScanResult(
-                isSafe = isSafe,
-                riskLevel = riskLevel,
-                tags = tags,
-                analysis = analysis,
-                flaggedItems = flaggedItems
-            )
+            ScanResult(isSafe, riskLevel, tags, analysis, flaggedItems)
             
-        } catch (e: IOException) {
-            Log.e(TAG, "❌ Network error", e)
-            return@withContext ScanResult(
-                isSafe = true,
-                riskLevel = "safe",
-                tags = listOf("Network Error"),
-                analysis = "Could not reach security server.",
-                flaggedItems = emptyList()
-            )
         } catch (e: Exception) {
             Log.e(TAG, "❌ Analysis error", e)
-            return@withContext ScanResult(
-                isSafe = true,
-                riskLevel = "safe",
-                tags = listOf("Error"),
-                analysis = "Analysis failed: ${e.message}",
-                flaggedItems = emptyList()
-            )
+            ScanResult(true, "safe", listOf("Error"), "Analysis failed", emptyList())
         }
     }
 
@@ -334,8 +251,6 @@ class ScreenReaderService : AccessibilityService() {
         contentList: List<ContentWithPosition>,
         result: ScanResult
     ) {
-        Log.d(TAG, "📍 Displaying tags near content...")
-        
         tagsContainer = FrameLayout(this)
 
         val params = WindowManager.LayoutParams(
@@ -347,286 +262,187 @@ class ScreenReaderService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         )
 
-        try {
-            windowManager.addView(tagsContainer, params)
+        windowManager.addView(tagsContainer, params)
+        
+        if (result.riskLevel == "safe") {
+            showSafeIndicator()
+            return
+        }
+        
+        val taggedBounds = mutableSetOf<Rect>()
+        var tagCount = 0
+        val maxTags = 10
+        
+        result.flaggedItems.forEach { item ->
+            if (tagCount >= maxTags) return@forEach
             
-            if (result.riskLevel == "safe") {
-                Log.d(TAG, "Content is safe - showing safe indicator")
-                showSafeIndicator()
-                return
+            val matchingContent = contentList.find { 
+                it.text.contains(item.content, ignoreCase = true) 
+            } ?: return@forEach
+            
+            if (taggedBounds.any { Math.abs(it.top - matchingContent.bounds.top) < 100 }) {
+                return@forEach
             }
             
-            val taggedBounds = mutableSetOf<Rect>()
-            val maxTags = 15
-            var tagCount = 0
-            
-            // Analyze patterns
-            val criticalPatterns = listOf(
-                "verify your account", "suspended", "confirm password",
-                "click here to login", "won a prize", "claim your reward",
-                "urgent action required", "verify identity", "payment failed",
-                "account will be closed", "verify now", "limited time",
-                "act now", "expire", "suspicious activity", "click here",
-                "confirm now", "update payment"
+            createModernTag(
+                matchingContent.bounds,
+                item.threat,
+                when (item.severity) {
+                    "high" -> android.graphics.Color.parseColor("#FF1744")
+                    "medium" -> android.graphics.Color.parseColor("#FF9800")
+                    else -> android.graphics.Color.parseColor("#2196F3")
+                },
+                matchingContent.text,
+                item.reason,
+                item.threat
             )
-            
-            val dangerPatterns = listOf("scam", "phishing", "fraud", "steal", "hack")
-            val warningPatterns = listOf("suspicious", "unusual", "verify", "confirm", "urgent")
-            val emotionalPatterns = listOf("love", "miss you", "help me", "please", "emergency", "crisis")
-            
-            // First, display tags from flaggedItems
-            result.flaggedItems.forEach { item ->
-                if (tagCount >= maxTags) return@forEach
-                
-                // Find matching content
-                val matchingContent = contentList.find { 
-                    it.text.contains(item.content, ignoreCase = true) 
-                }
-                
-                matchingContent?.let { content ->
-                    if (taggedBounds.any { existingBounds ->
-                        Math.abs(existingBounds.top - content.bounds.top) < 150 &&
-                        Math.abs(existingBounds.left - content.bounds.left) < 150
-                    }) {
-                        return@forEach
-                    }
-                    
-                    val color = when (item.severity) {
-                        "high" -> android.graphics.Color.parseColor("#FF1744")
-                        "medium" -> android.graphics.Color.parseColor("#FF9800")
-                        else -> android.graphics.Color.parseColor("#2196F3")
-                    }
-                    
-                    val tagText = when (item.threat) {
-                        "Scam" -> "🚨 SCAM"
-                        "Phishing" -> "🚨 PHISHING"
-                        "Suspicious Link" -> "🔗 CHECK LINK"
-                        else -> "⚠️ ${item.threat}"
-                    }
-                    
-                    createClickableTag(
-                        content.bounds,
-                        tagText,
-                        color,
-                        content.text,
-                        item.reason,
-                        item.threat
-                    )
-                    taggedBounds.add(content.bounds)
-                    tagCount++
-                }
-            }
-            
-            // Then analyze content for additional patterns
-            contentList.forEach { content ->
-                if (tagCount >= maxTags) return@forEach
-                
-                val lowerText = content.text.lowercase()
-                
-                // Skip if already tagged nearby
-                if (taggedBounds.any { existingBounds ->
-                    Math.abs(existingBounds.top - content.bounds.top) < 150 &&
-                    Math.abs(existingBounds.left - content.bounds.left) < 150
-                }) {
-                    return@forEach
-                }
-                
-                val tagInfo = when {
-                    criticalPatterns.any { lowerText.contains(it) } -> {
-                        TagInfo(
-                            "🚨 PHISHING",
-                            android.graphics.Color.parseColor("#FF1744"),
-                            content.text,
-                            "This message uses urgent language and asks for sensitive actions like verifying account or clicking links. This is a common phishing tactic.",
-                            "Phishing"
-                        )
-                    }
-                    dangerPatterns.any { lowerText.contains(it) } && result.riskLevel == "danger" -> {
-                        TagInfo(
-                            "⚠️ SCAM",
-                            android.graphics.Color.parseColor("#F44336"),
-                            content.text,
-                            "This content contains keywords associated with scams. Do not share personal information or send money.",
-                            "Scam"
-                        )
-                    }
-                    warningPatterns.any { lowerText.contains(it) } && result.riskLevel == "warning" -> {
-                        TagInfo(
-                            "⚠️ Verify",
-                            android.graphics.Color.parseColor("#FF9800"),
-                            content.text,
-                            "This message asks you to verify or confirm something. Always verify through official channels, not through links in messages.",
-                            "Verification Request"
-                        )
-                    }
-                    emotionalPatterns.any { lowerText.contains(it) } && lowerText.length > 30 -> {
-                        TagInfo(
-                            "💭 Emotional Tone",
-                            android.graphics.Color.parseColor("#9C27B0"),
-                            content.text,
-                            "This message uses emotional language. Scammers often use emotions to manipulate victims. Stay calm and think carefully.",
-                            "Emotional Manipulation"
-                        )
-                    }
-                    lowerText.contains("http") || lowerText.contains("www") || lowerText.contains("bit.ly") -> {
-                        TagInfo(
-                            "🔗 Check Link",
-                            android.graphics.Color.parseColor("#2196F3"),
-                            content.text,
-                            "This contains a link. Always verify the destination before clicking. Be especially careful with shortened URLs.",
-                            "Link Detected"
-                        )
-                    }
-                    else -> null
-                }
-                
-                tagInfo?.let { info ->
-                    createClickableTag(
-                        content.bounds,
-                        info.text,
-                        info.color,
-                        info.fullText,
-                        info.reason,
-                        info.threat
-                    )
-                    taggedBounds.add(content.bounds)
-                    tagCount++
-                }
-            }
-            
-            if (tagCount == 0 && result.riskLevel == "danger") {
-                val topBounds = Rect(60, 300, 700, 400)
-                createClickableTag(
-                    topBounds,
-                    "🚨 THREAT DETECTED",
-                    android.graphics.Color.parseColor("#D32F2F"),
-                    result.analysis,
-                    result.analysis,
-                    "General Threat"
-                )
-                tagCount++
-            }
-            
-            if (tagCount > 0) {
-                showStatusIndicator(result, tagCount)
-            }
-            
-            Log.d(TAG, "✅ $tagCount tags displayed")
-            
-            // Auto-hide based on severity
-            serviceScope.launch {
-                val hideDelay = when (result.riskLevel) {
-                    "danger" -> 90000L  // 90 seconds for danger
-                    "warning" -> 45000L // 45 seconds for warning
-                    else -> 10000L      // 10 seconds for safe
-                }
-                delay(hideDelay)
-                if (tagsVisible) {
-                    clearTags()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to display tags", e)
+            taggedBounds.add(matchingContent.bounds)
+            tagCount++
+        }
+        
+        if (tagCount > 0) {
+            showStatusBanner(result, tagCount)
+            autoHideTags(result.riskLevel)
         }
     }
 
-    private fun createClickableTag(
+    private fun createModernTag(
         bounds: Rect,
-        text: String,
+        tagText: String,
         color: Int,
         fullText: String,
         reason: String,
         threat: String
     ) {
-        val tagView = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(32, 16, 32, 16)
-            background = createEnhancedRoundedBackground(color)
-            elevation = 16f
-            alpha = 0.98f
-            
-            // Make it clickable
-            isClickable = true
-            isFocusable = true
+        // Container with shadow
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = createModernTagBackground(color)
+            elevation = 12f
+            setPadding(16, 12, 16, 12)
         }
         
-        val textView = TextView(this).apply {
-            this.text = text
-            textSize = 15f
+        // Main tag row
+        val mainRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        
+        // Warning icon
+        val icon = TextView(this).apply {
+            text = when (threat) {
+                "Scam", "Phishing" -> "⚠️"
+                "Suspicious Link" -> "🔗"
+                else -> "❗"
+            }
+            textSize = 16f
+            setPadding(0, 0, 8, 0)
+        }
+        
+        // Tag text
+        val label = TextView(this).apply {
+            text = when (threat) {
+                "Scam" -> "SCAM DETECTED"
+                "Phishing" -> "PHISHING ATTEMPT"
+                "Suspicious Link" -> "SUSPICIOUS LINK"
+                else -> "THREAT DETECTED"
+            }
+            textSize = 13f
             setTextColor(android.graphics.Color.WHITE)
             setTypeface(null, android.graphics.Typeface.BOLD)
-            setShadowLayer(4f, 0f, 2f, android.graphics.Color.parseColor("#40000000"))
         }
         
-        tagView.addView(textView)
+        mainRow.addView(icon)
+        mainRow.addView(label)
         
-        // Smart positioning with better visibility
+        // "Learn more" button
+        val learnMore = TextView(this).apply {
+            text = "Learn more"
+            textSize = 11f
+            setTextColor(android.graphics.Color.WHITE)
+            setPadding(12, 8, 12, 8)
+            alpha = 0.9f
+            background = createLearnMoreBackground(color)
+        }
+        
+        container.addView(mainRow)
+        container.addView(learnMore)
+        
+        // Position tag
         val screenWidth = resources.displayMetrics.widthPixels
         val screenHeight = resources.displayMetrics.heightPixels
-        val tagWidth = 350
+        val tagWidth = 280
         
         val layoutParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT,
+            tagWidth,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             leftMargin = when {
-                bounds.left + tagWidth < screenWidth - 60 -> bounds.left + 20
-                bounds.right - tagWidth > 60 -> bounds.right - tagWidth - 20
+                bounds.left + tagWidth < screenWidth - 40 -> bounds.left + 10
                 else -> (screenWidth - tagWidth) / 2
-            }.coerceIn(40, screenWidth - tagWidth - 40)
+            }.coerceIn(20, screenWidth - tagWidth - 20)
             
             topMargin = when {
-                bounds.top > 120 -> bounds.top - 80
-                bounds.bottom + 100 < screenHeight -> bounds.bottom + 20
-                else -> bounds.centerY()
-            }.coerceIn(100, screenHeight - 150)
+                bounds.top > 100 -> bounds.top - 80
+                else -> bounds.bottom + 10
+            }.coerceIn(80, screenHeight - 200)
         }
 
-        // Make the tag clickable to show details using Toast instead of Dialog
-        tagView.setOnClickListener {
+        // Click to show details
+        container.setOnClickListener {
             serviceScope.launch(Dispatchers.Main) {
                 android.widget.Toast.makeText(
                     this@ScreenReaderService,
-                    "$text\n\n$reason\n\nContent: \"${fullText.take(100)}...\"",
+                    "⚠️ $threat\n\n$reason\n\nContent: \"${fullText.take(80)}...\"",
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             }
         }
 
-        try {
-            tagsContainer?.addView(tagView, layoutParams)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error adding tag", e)
+        tagsContainer?.addView(container, layoutParams)
+    }
+    
+    private fun createModernTagBackground(color: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(color)
+            cornerRadius = 12f
+            setStroke(2, android.graphics.Color.WHITE)
         }
     }
     
-    private fun createEnhancedRoundedBackground(color: Int): android.graphics.drawable.GradientDrawable {
-        return android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-            setColor(color)
-            cornerRadius = 28f
-            setStroke(4, android.graphics.Color.WHITE)
+    private fun createLearnMoreBackground(baseColor: Int): GradientDrawable {
+        return GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(android.graphics.Color.WHITE)
+            cornerRadius = 8f
+            alpha = 40
         }
     }
 
     private fun showSafeIndicator() {
         val safeView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(40, 20, 40, 20)
-            setBackgroundColor(android.graphics.Color.parseColor("#4CAF50"))
-            elevation = 16f
+            setPadding(32, 16, 32, 16)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(android.graphics.Color.parseColor("#4CAF50"))
+                cornerRadius = 16f
+            }
+            elevation = 12f
         }
         
         val iconText = TextView(this).apply {
             text = "✓"
-            textSize = 28f
+            textSize = 24f
             setTextColor(android.graphics.Color.WHITE)
-            setPadding(0, 0, 20, 0)
+            setPadding(0, 0, 16, 0)
+            setTypeface(null, android.graphics.Typeface.BOLD)
         }
         
         val messageText = TextView(this).apply {
-            text = "Screen is Safe"
-            textSize = 18f
+            text = "No Threats Detected"
+            textSize = 16f
             setTextColor(android.graphics.Color.WHITE)
             setTypeface(null, android.graphics.Typeface.BOLD)
         }
@@ -639,61 +455,70 @@ class ScreenReaderService : AccessibilityService() {
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
-            topMargin = 150
+            topMargin = 120
         }
         
         tagsContainer?.addView(safeView, layoutParams)
         
         serviceScope.launch {
-            delay(4000)
-            if (tagsVisible) {
-                clearTags()
-            }
+            delay(3000)
+            if (tagsVisible) clearTags()
         }
     }
 
-    private fun showStatusIndicator(result: ScanResult, tagCount: Int) {
-        val statusView = LinearLayout(this).apply {
+    private fun showStatusBanner(result: ScanResult, tagCount: Int) {
+        val banner = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(40, 20, 40, 20)
+            setPadding(24, 12, 24, 12)
             val bgColor = when (result.riskLevel) {
                 "danger" -> android.graphics.Color.parseColor("#D32F2F")
                 "warning" -> android.graphics.Color.parseColor("#F57C00")
                 else -> android.graphics.Color.parseColor("#388E3C")
             }
-            setBackgroundColor(bgColor)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(bgColor)
+                cornerRadius = 12f
+            }
             elevation = 16f
         }
         
         val statusText = TextView(this).apply {
-            text = when (result.riskLevel) {
-                "danger" -> "🛡️ $tagCount THREATS FOUND"
-                "warning" -> "🛡️ $tagCount Warnings"
-                else -> "🛡️ Safe"
-            }
-            textSize = 16f
+            text = "🛡️ $tagCount THREATS FOUND"
+            textSize = 14f
             setTextColor(android.graphics.Color.WHITE)
             setTypeface(null, android.graphics.Typeface.BOLD)
         }
         
-        statusView.addView(statusText)
+        banner.addView(statusText)
         
         val layoutParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             gravity = Gravity.CENTER_HORIZONTAL or Gravity.BOTTOM
-            bottomMargin = 120
+            bottomMargin = 100
         }
         
-        tagsContainer?.addView(statusView, layoutParams)
+        tagsContainer?.addView(banner, layoutParams)
+    }
+
+    private fun autoHideTags(riskLevel: String) {
+        serviceScope.launch {
+            val hideDelay = when (riskLevel) {
+                "danger" -> 90000L
+                "warning" -> 45000L
+                else -> 10000L
+            }
+            delay(hideDelay)
+            if (tagsVisible) clearTags()
+        }
     }
 
     private fun showScanningAnimation() {
         if (scanningOverlay != null) return
 
-        scanningOverlay = LayoutInflater.from(this)
-            .inflate(R.layout.scanning_overlay, null)
+        scanningOverlay = LayoutInflater.from(this).inflate(R.layout.scanning_overlay, null)
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -704,11 +529,7 @@ class ScreenReaderService : AccessibilityService() {
             PixelFormat.TRANSLUCENT
         )
 
-        try {
-            windowManager.addView(scanningOverlay, params)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to add scanning overlay", e)
-        }
+        windowManager.addView(scanningOverlay, params)
     }
 
     private fun hideScanningAnimation() {
@@ -716,7 +537,7 @@ class ScreenReaderService : AccessibilityService() {
             try {
                 windowManager.removeView(view)
             } catch (e: Exception) {
-                Log.e(TAG, "Error removing scanning overlay", e)
+                Log.e(TAG, "Error removing overlay", e)
             }
         }
         scanningOverlay = null
@@ -724,40 +545,26 @@ class ScreenReaderService : AccessibilityService() {
 
     private fun showInfo(message: String) {
         hideScanningAnimation()
-        
         serviceScope.launch(Dispatchers.Main) {
-            android.widget.Toast.makeText(
-                this@ScreenReaderService,
-                message,
-                android.widget.Toast.LENGTH_LONG
-            ).show()
+            android.widget.Toast.makeText(this@ScreenReaderService, message, android.widget.Toast.LENGTH_LONG).show()
         }
-        
         isScanning = false
     }
 
     private fun showError(message: String) {
-        val intent = Intent(ACTION_SCAN_COMPLETE)
-        intent.putExtra("error", message)
-        sendBroadcast(intent)
-        
+        sendBroadcast(Intent(ACTION_SCAN_COMPLETE).apply { putExtra("error", message) })
         hideScanningAnimation()
         isScanning = false
         
         serviceScope.launch(Dispatchers.Main) {
-            android.widget.Toast.makeText(
-                this@ScreenReaderService,
-                message,
-                android.widget.Toast.LENGTH_LONG
-            ).show()
+            android.widget.Toast.makeText(this@ScreenReaderService, message, android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
     private fun clearTags() {
-        Log.d(TAG, "Clearing tags...")
-        tagsContainer?.let { container ->
+        tagsContainer?.let {
             try {
-                windowManager.removeView(container)
+                windowManager.removeView(it)
             } catch (e: Exception) {
                 Log.e(TAG, "Error clearing tags", e)
             }
