@@ -1,6 +1,7 @@
 package com.example.stremini_chatbot
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -8,6 +9,7 @@ import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.util.Log
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.View
@@ -40,7 +42,7 @@ class ScreenReaderService : AccessibilityService() {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .build()
-    
+
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var scanningOverlay: View? = null
     private var tagsContainer: FrameLayout? = null
@@ -77,10 +79,10 @@ class ScreenReaderService : AccessibilityService() {
     private fun startScreenScan() {
         isScanning = true
         showScanningAnimation()
-        
+
         serviceScope.launch {
             try {
-                delay(1000) 
+                delay(1000)
                 val rootNode = rootInActiveWindow ?: return@launch
                 val contentList = mutableListOf<ContentWithPosition>()
                 extractContentWithPositions(rootNode, contentList)
@@ -88,7 +90,7 @@ class ScreenReaderService : AccessibilityService() {
 
                 val fullText = contentList.joinToString("\n") { it.text }
                 val result = analyzeScreenContent(fullText)
-                
+
                 hideScanningAnimation()
                 displayTagsInUiStyle(contentList, result)
 
@@ -97,10 +99,11 @@ class ScreenReaderService : AccessibilityService() {
                     putExtra(EXTRA_SCANNED_TEXT, fullText)
                 }
                 sendBroadcast(broadcastIntent)
-                
+
                 isScanning = false
                 tagsVisible = true
             } catch (e: Exception) {
+                Log.e(TAG, "Scan Error", e)
                 hideScanningAnimation()
                 isScanning = false
             }
@@ -121,7 +124,7 @@ class ScreenReaderService : AccessibilityService() {
             val response = client.newCall(request).execute()
             val responseData = response.body?.string() ?: ""
             val json = JSONObject(responseData)
-            
+
             val taggedArray = json.optJSONArray("taggedElements")
             val tags = mutableListOf<TaggedElement>()
             if (taggedArray != null) {
@@ -148,97 +151,171 @@ class ScreenReaderService : AccessibilityService() {
     }
 
     private fun displayTagsInUiStyle(contentList: List<ContentWithPosition>, result: ScanResult) {
+        clearTags()
+        
         tagsContainer = FrameLayout(this)
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, 
             PixelFormat.TRANSLUCENT
         )
         windowManager.addView(tagsContainer, params)
 
-        // Main Banner (Matches Top UI in images)
+        // 1. Create the Top Banner
         val bannerText = if (result.isSafe) "Safe: No Threat Detected" else "Suspicious Links: Threat Detected"
-        val bannerColor = if (result.isSafe) Color.parseColor("#2E7D32") else Color.parseColor("#C62828")
-        val bannerDetail = if (result.isSafe) "Screen appears safe" else "Suspicious links may be dangerous"
-        
-        createPillTag(null, bannerText, bannerColor, bannerDetail, true)
+        val bannerColor = if (result.isSafe) Color.parseColor("#1B5E20") else Color.parseColor("#B71C1C")
+        val bannerDetail = if (result.isSafe) "Scam Detection - Verify site safety" else "Scam Detection - Suspicious links may be dangerous"
 
-        // Inline Tags (Tags links or messages)
-        result.taggedElements.forEach { tag ->
-            val sourceMatch = contentList.find { content ->
-                val lowerContent = content.text.lowercase()
-                val lowerReason = tag.reason.lowercase()
-                lowerReason.contains(lowerContent.take(15)) || lowerContent.contains(lowerReason.split(":").last().trim().take(10))
-            }
+        createBanner(bannerText, bannerColor, bannerDetail, result.isSafe)
 
-            if (sourceMatch != null) {
-                createPillTag(sourceMatch.bounds, tag.label, tag.color, "", false)
+        // 2. Create Floating Tags
+        if (!result.isSafe) {
+            result.taggedElements.forEach { tag ->
+                val sourceMatches = contentList.filter { content ->
+                    val lowerContent = content.text.lowercase()
+                    val lowerReason = tag.reason.lowercase()
+                    lowerContent.contains(lowerReason) || 
+                    (lowerContent.length > 10 && lowerReason.contains(lowerContent.take(20)))
+                }
+
+                sourceMatches.forEach { match ->
+                    createFloatingTag(match.bounds, "Danger: Threat Detected", Color.parseColor("#B71C1C"))
+                }
             }
         }
     }
 
-    private fun createPillTag(bounds: Rect?, labelText: String, color: Int, subText: String, isMainBanner: Boolean) {
-        val pill = LinearLayout(this).apply {
+    // --- UI COMPONENT: TOP BANNER (NO 'LEARN MORE') ---
+    private fun createBanner(title: String, color: Int, subtitle: String, isSafe: Boolean) {
+        val context = this
+        val bannerLayout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = if (isMainBanner) Gravity.START else Gravity.CENTER_VERTICAL
-            setPadding(if (isMainBanner) 40 else 24, 16, 40, 16)
+            setPadding(40, 30, 40, 30)
             background = GradientDrawable().apply {
-                setColor(color)
-                cornerRadius = if (isMainBanner) 20f else 100f 
-                setAlpha(240)
+                setColor(color) 
+                cornerRadius = 24f
+                alpha = 240
             }
-            elevation = 12f
+            elevation = 10f
         }
 
-        val row = LinearLayout(this).apply {
+        val titleRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val icon = TextView(this).apply {
-            text = if (labelText.contains("Safe", true)) "✓" else "⚠️"
+        val iconView = TextView(context).apply {
+            text = "🛡️"
+            textSize = 18f
+            setPadding(0, 0, 20, 0)
             setTextColor(Color.WHITE)
-            textSize = if (isMainBanner) 18f else 13f
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 16, 0)
         }
-
-        val label = TextView(this).apply {
-            text = labelText
+        
+        val titleView = TextView(context).apply {
+            text = title
             setTextColor(Color.WHITE)
-            textSize = if (isMainBanner) 15f else 11f
-            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            textSize = 16f
+            setTypeface(Typeface.DEFAULT_BOLD)
+        }
+        
+        // REMOVED: "Learn More" TextView
+
+        titleRow.addView(iconView)
+        titleRow.addView(titleView)
+
+        val subtitleView = TextView(context).apply {
+            text = subtitle
+            setTextColor(Color.parseColor("#E0E0E0"))
+            textSize = 12f
+            setPadding(60, 5, 0, 0)
         }
 
-        row.addView(icon)
-        row.addView(label)
-        pill.addView(row)
+        bannerLayout.addView(titleRow)
+        bannerLayout.addView(subtitleView)
 
-        if (isMainBanner && subText.isNotEmpty()) {
-            val detailText = TextView(this).apply {
-                text = subText
-                setTextColor(Color.parseColor("#EEEEEE"))
-                textSize = 12f
-                setPadding(68, 4, 0, 0)
-            }
-            pill.addView(detailText)
-        }
-
-        val layoutParams = FrameLayout.LayoutParams(
-            if (isMainBanner) FrameLayout.LayoutParams.MATCH_PARENT else FrameLayout.LayoutParams.WRAP_CONTENT,
+        val params = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            if (isMainBanner) {
-                gravity = Gravity.TOP
-                setMargins(40, 140, 40, 0)
-            } else if (bounds != null) {
-                // Places tag directly above the message or link
-                leftMargin = (bounds.left + 15).coerceAtLeast(20)
-                topMargin = (bounds.top - 85).coerceAtLeast(120)
+            gravity = Gravity.TOP
+            setMargins(30, 100, 30, 0)
+        }
+
+        tagsContainer?.addView(bannerLayout, params)
+    }
+
+    // --- UI COMPONENT: FLOATING PILL TAG (NEAR LINK) ---
+    private fun createFloatingTag(bounds: Rect, labelText: String, color: Int) {
+        val context = this
+        
+        val pill = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(20, 10, 20, 10) // Slightly tighter padding
+            background = GradientDrawable().apply {
+                setColor(color)
+                cornerRadius = 100f 
+            }
+            elevation = 15f
+        }
+
+        val icon = TextView(context).apply {
+            text = "!" 
+            textSize = 12f
+            setTypeface(Typeface.DEFAULT_BOLD)
+            setTextColor(color)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                shape = GradientDrawable.OVAL
+                setSize(36, 36)
+            }
+            layoutParams = LinearLayout.LayoutParams(40, 40).apply {
+                marginEnd = 14
             }
         }
+
+        val label = TextView(context).apply {
+            text = labelText
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            setTypeface(Typeface.DEFAULT_BOLD)
+        }
+
+        val menuDots = TextView(context).apply {
+            text = "⋮"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setPadding(14, 0, 0, 0)
+        }
+
+        pill.addView(icon)
+        pill.addView(label)
+        pill.addView(menuDots)
+
+        // Positioning Logic: Closely attached to the link
+        val layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            leftMargin = bounds.left
+            
+            // Calculate a tight fit above the element
+            val tagHeightApprox = 75 
+            
+            // If the element is very high up, put the tag slightly *over* the top part of the element
+            // Otherwise, put it exactly on top of the element
+            topMargin = if (bounds.top > 150) {
+                bounds.top - tagHeightApprox + 10 // +10 to slightly overlap/touch the link
+            } else {
+                bounds.top + 10 // Fallback: inside the top edge if too close to screen top
+            }
+        }
+        
         tagsContainer?.addView(pill, layoutParams)
     }
 
@@ -247,12 +324,12 @@ class ScreenReaderService : AccessibilityService() {
         if (!text.isNullOrBlank()) {
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
-            if (bounds.width() > 5 && bounds.height() > 5) {
+            if (bounds.width() > 50 && bounds.height() > 20) {
                 list.add(ContentWithPosition(text, bounds))
             }
         }
         for (i in 0 until node.childCount) {
-            node.getChild(i)?.let { 
+            node.getChild(i)?.let {
                 extractContentWithPositions(it, list)
                 it.recycle()
             }
@@ -265,22 +342,35 @@ class ScreenReaderService : AccessibilityService() {
         try {
             scanningOverlay = LayoutInflater.from(this).inflate(R.layout.scanning_overlay, null)
             val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or 
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
             )
             windowManager.addView(scanningOverlay, params)
-        } catch (e: Exception) { Log.e(TAG, "Overlay Error: ${e.message}") }
+        } catch (e: Exception) {
+            Log.e(TAG, "Overlay Error: ${e.message}")
+        }
     }
 
     private fun hideScanningAnimation() {
-        scanningOverlay?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
+        scanningOverlay?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (e: Exception) {}
+        }
         scanningOverlay = null
     }
 
     private fun clearTags() {
-        tagsContainer?.let { try { windowManager.removeView(it) } catch (e: Exception) {} }
+        tagsContainer?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (e: Exception) {}
+        }
         tagsContainer = null
         tagsVisible = false
     }
