@@ -59,7 +59,14 @@ class ScreenReaderService : AccessibilityService() {
     data class TaggedElement(
         val label: String,
         val color: Int,
-        val reason: String
+        val reason: String,
+        val url: String?
+    )
+
+    data class ContentWithPosition(
+        val text: String, 
+        val bounds: Rect,
+        val isUrl: Boolean = false
     )
 
     override fun onServiceConnected() {
@@ -92,7 +99,7 @@ class ScreenReaderService : AccessibilityService() {
                 val result = analyzeScreenContent(fullText)
 
                 hideScanningAnimation()
-                displayTagsInUiStyle(contentList, result)
+                displayTagsForAllThreats(contentList, result)
 
                 val broadcastIntent = Intent(ACTION_SCAN_COMPLETE).apply {
                     setPackage(packageName)
@@ -131,10 +138,12 @@ class ScreenReaderService : AccessibilityService() {
                 for (i in 0 until taggedArray.length()) {
                     val item = taggedArray.getJSONObject(i)
                     val securityTag = item.getJSONObject("securityTag")
+                    val details = item.getJSONObject("details")
                     tags.add(TaggedElement(
                         label = securityTag.getString("label"),
                         color = Color.parseColor(securityTag.getString("color")),
-                        reason = item.getJSONObject("details").getString("reason")
+                        reason = details.getString("reason"),
+                        url = details.optString("url", null)
                     ))
                 }
             }
@@ -146,11 +155,12 @@ class ScreenReaderService : AccessibilityService() {
                 taggedElements = tags
             )
         } catch (e: Exception) {
+            Log.e(TAG, "Analysis error", e)
             ScanResult(true, "safe", "✓ No threats detected", emptyList())
         }
     }
 
-    private fun displayTagsInUiStyle(contentList: List<ContentWithPosition>, result: ScanResult) {
+    private fun displayTagsForAllThreats(contentList: List<ContentWithPosition>, result: ScanResult) {
         clearTags()
         
         tagsContainer = FrameLayout(this)
@@ -168,28 +178,135 @@ class ScreenReaderService : AccessibilityService() {
         // 1. Create the Top Banner
         val bannerText = if (result.isSafe) "Safe: No Threat Detected" else "Suspicious Links: Threat Detected"
         val bannerColor = if (result.isSafe) Color.parseColor("#1B5E20") else Color.parseColor("#B71C1C")
-        val bannerDetail = if (result.isSafe) "Scam Detection - Verify site safety" else "Scam Detection - Suspicious links may be dangerous"
+        val bannerDetail = if (result.isSafe) 
+            "Scam Detection - Verify site safety" 
+        else 
+            "⚠️ ${result.taggedElements.size} threat(s) found - Be careful"
 
         createBanner(bannerText, bannerColor, bannerDetail, result.isSafe)
 
-        // 2. Create Floating Tags
+        // 2. Create Individual Tags for EACH Suspicious URL/Threat
         if (!result.isSafe) {
+            // Track tagged positions to avoid exact duplicates at same location
+            val taggedPositions = mutableListOf<Pair<Int, Int>>()
+            
             result.taggedElements.forEach { tag ->
-                val sourceMatches = contentList.filter { content ->
-                    val lowerContent = content.text.lowercase()
-                    val lowerReason = tag.reason.lowercase()
-                    lowerContent.contains(lowerReason) || 
-                    (lowerContent.length > 10 && lowerReason.contains(lowerContent.take(20)))
-                }
+                // For URL-specific threats, find the exact URL location
+                if (tag.url != null && tag.url.isNotEmpty()) {
+                    Log.d(TAG, "Looking for URL: ${tag.url}")
+                    
+                    // Find all content items that contain this URL (prioritize exact matches)
+                    val exactMatches = contentList.filter { content ->
+                        content.text.equals(tag.url, ignoreCase = true)
+                    }
+                    
+                    val partialMatches = if (exactMatches.isEmpty()) {
+                        contentList.filter { content ->
+                            content.text.contains(tag.url, ignoreCase = true) ||
+                            tag.url.contains(content.text, ignoreCase = true)
+                        }
+                    } else emptyList()
+                    
+                    val urlMatches = exactMatches.ifEmpty { partialMatches }
 
-                sourceMatches.forEach { match ->
-                    createFloatingTag(match.bounds, "Danger: Threat Detected", Color.parseColor("#B71C1C"))
+                    if (urlMatches.isNotEmpty()) {
+                        Log.d(TAG, "Found ${urlMatches.size} matches for ${tag.url}")
+                        
+                        // Tag EACH occurrence of this URL
+                        urlMatches.forEachIndexed { index, match ->
+                            val posKey = Pair(match.bounds.left, match.bounds.top)
+                            
+                            // Check if we already tagged this exact position
+                            val alreadyTagged = taggedPositions.any { 
+                                Math.abs(it.first - posKey.first) < 50 && 
+                                Math.abs(it.second - posKey.second) < 50 
+                            }
+                            
+                            if (!alreadyTagged) {
+                                Log.d(TAG, "Creating tag at bounds: ${match.bounds}")
+                                createFloatingTag(
+                                    match.bounds, 
+                                    tag.label,
+                                    tag.color,
+                                    tag.reason,
+                                    tag.url
+                                )
+                                taggedPositions.add(posKey)
+                            } else {
+                                Log.d(TAG, "Skipping duplicate tag at position $posKey")
+                            }
+                        }
+                    } else {
+                        Log.d(TAG, "No matches found for ${tag.url}, searching for URLs in content")
+                        
+                        // Try to find any URL-like content
+                        val urlLikeContent = contentList.filter { it.isUrl }
+                        if (urlLikeContent.isNotEmpty()) {
+                            val match = urlLikeContent.first()
+                            val posKey = Pair(match.bounds.left, match.bounds.top)
+                            if (!taggedPositions.contains(posKey)) {
+                                createFloatingTag(match.bounds, tag.label, tag.color, tag.reason, tag.url)
+                                taggedPositions.add(posKey)
+                            }
+                        } else {
+                            // Fallback: create tag at a default position
+                            createGeneralThreatTag(tag, taggedPositions.size)
+                        }
+                    }
+                } else {
+                    // General threat (not URL-specific)
+                    Log.d(TAG, "Processing general threat: ${tag.reason}")
+                    
+                    // Try to find related content by keyword matching
+                    val keywords = tag.reason.lowercase().split(" ")
+                        .filter { it.length > 4 }
+                        .filter { !it.matches(Regex(".*[0-9%].*")) } // Skip words with numbers
+                    
+                    val relatedContent = contentList.find { content ->
+                        val lowerContent = content.text.lowercase()
+                        keywords.any { keyword -> lowerContent.contains(keyword) }
+                    }
+
+                    if (relatedContent != null) {
+                        val posKey = Pair(relatedContent.bounds.left, relatedContent.bounds.top)
+                        val alreadyTagged = taggedPositions.any { 
+                            Math.abs(it.first - posKey.first) < 50 && 
+                            Math.abs(it.second - posKey.second) < 50 
+                        }
+                        
+                        if (!alreadyTagged) {
+                            createFloatingTag(relatedContent.bounds, tag.label, tag.color, tag.reason, null)
+                            taggedPositions.add(posKey)
+                        }
+                    } else {
+                        createGeneralThreatTag(tag, taggedPositions.size)
+                    }
                 }
             }
+            
+            Log.d(TAG, "Total tags created: ${taggedPositions.size}")
         }
     }
 
-    // --- UI COMPONENT: TOP BANNER (NO 'LEARN MORE') ---
+    // Create a tag when we can't find exact position
+    private fun createGeneralThreatTag(tag: TaggedElement, contentCount: Int) {
+        val context = this
+        
+        // Position in middle-right area of screen
+        val screenHeight = resources.displayMetrics.heightPixels
+        val screenWidth = resources.displayMetrics.widthPixels
+        
+        val fakeBounds = Rect(
+            screenWidth / 2,
+            screenHeight / 3,
+            screenWidth - 50,
+            screenHeight / 3 + 100
+        )
+        
+        createFloatingTag(fakeBounds, tag.label, tag.color, tag.reason, tag.url)
+    }
+
+    // --- UI COMPONENT: TOP BANNER ---
     private fun createBanner(title: String, color: Int, subtitle: String, isSafe: Boolean) {
         val context = this
         val bannerLayout = LinearLayout(context).apply {
@@ -209,7 +326,7 @@ class ScreenReaderService : AccessibilityService() {
         }
 
         val iconView = TextView(context).apply {
-            text = "🛡️"
+            text = if (isSafe) "✓" else "⚠️"
             textSize = 18f
             setPadding(0, 0, 20, 0)
             setTextColor(Color.WHITE)
@@ -221,8 +338,6 @@ class ScreenReaderService : AccessibilityService() {
             textSize = 16f
             setTypeface(Typeface.DEFAULT_BOLD)
         }
-        
-        // REMOVED: "Learn More" TextView
 
         titleRow.addView(iconView)
         titleRow.addView(titleView)
@@ -248,86 +363,118 @@ class ScreenReaderService : AccessibilityService() {
         tagsContainer?.addView(bannerLayout, params)
     }
 
-    // --- UI COMPONENT: FLOATING PILL TAG (NEAR LINK) ---
-    private fun createFloatingTag(bounds: Rect, labelText: String, color: Int) {
+    // --- UI COMPONENT: FLOATING PILL TAG (NEAR EACH LINK) ---
+    private fun createFloatingTag(bounds: Rect, labelText: String, color: Int, reason: String, url: String?) {
         val context = this
         
         val pill = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(20, 10, 20, 10) // Slightly tighter padding
+            setPadding(16, 8, 16, 8)
             background = GradientDrawable().apply {
                 setColor(color)
                 cornerRadius = 100f 
             }
-            elevation = 15f
+            elevation = 20f
         }
 
         val icon = TextView(context).apply {
-            text = "!" 
-            textSize = 12f
+            text = "⚠" 
+            textSize = 14f
             setTypeface(Typeface.DEFAULT_BOLD)
             setTextColor(color)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
                 setColor(Color.WHITE)
                 shape = GradientDrawable.OVAL
-                setSize(36, 36)
+                setSize(32, 32)
             }
-            layoutParams = LinearLayout.LayoutParams(40, 40).apply {
-                marginEnd = 14
+            layoutParams = LinearLayout.LayoutParams(36, 36).apply {
+                marginEnd = 12
             }
         }
 
+        // Truncate label if too long
+        val displayLabel = if (labelText.length > 20) {
+            labelText.substring(0, 17) + "..."
+        } else labelText
+
         val label = TextView(context).apply {
-            text = labelText
+            text = displayLabel
             setTextColor(Color.WHITE)
             textSize = 12f
             setTypeface(Typeface.DEFAULT_BOLD)
-        }
-
-        val menuDots = TextView(context).apply {
-            text = "⋮"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            setPadding(14, 0, 0, 0)
+            maxLines = 1
         }
 
         pill.addView(icon)
         pill.addView(label)
-        pill.addView(menuDots)
 
-        // Positioning Logic: Closely attached to the link
+        // Calculate precise positioning DIRECTLY above the link
         val layoutParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            leftMargin = bounds.left
+            val screenWidth = resources.displayMetrics.widthPixels
+            val screenHeight = resources.displayMetrics.heightPixels
             
-            // Calculate a tight fit above the element
-            val tagHeightApprox = 75 
+            // Tag height (approximate) 
+            val tagHeight = 60
             
-            // If the element is very high up, put the tag slightly *over* the top part of the element
-            // Otherwise, put it exactly on top of the element
-            topMargin = if (bounds.top > 150) {
-                bounds.top - tagHeightApprox + 10 // +10 to slightly overlap/touch the link
+            // Horizontal positioning: align with left edge of link, but ensure it fits on screen
+            val desiredLeft = bounds.left
+            val maxLeft = screenWidth - 280 // Reserve space for tag width
+            leftMargin = desiredLeft.coerceIn(10, maxLeft.coerceAtLeast(10))
+            
+            // Vertical positioning: Place DIRECTLY above the link
+            val spaceAbove = bounds.top - 180 // Space above link (account for banner)
+            
+            if (spaceAbove >= tagHeight) {
+                // Enough space above: position tag directly above link with small gap
+                topMargin = bounds.top - tagHeight - 5
+            } else if (bounds.bottom + tagHeight + 20 < screenHeight) {
+                // Not enough space above: position below link
+                topMargin = bounds.bottom + 5
             } else {
-                bounds.top + 10 // Fallback: inside the top edge if too close to screen top
+                // Overlapping scenario: position at top edge of link
+                topMargin = bounds.top + 5
             }
+            
+            // Ensure tag is visible on screen
+            topMargin = topMargin.coerceIn(180, screenHeight - tagHeight - 20)
         }
         
         tagsContainer?.addView(pill, layoutParams)
+        
+        // Log for debugging
+        Log.d(TAG, "Tag '$labelText' - Link at (${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}) - Tag at (${layoutParams.leftMargin}, ${layoutParams.topMargin})")
     }
 
     private fun extractContentWithPositions(node: AccessibilityNodeInfo, list: MutableList<ContentWithPosition>) {
         val text = node.text?.toString() ?: node.contentDescription?.toString()
-        if (!text.isNullOrBlank()) {
+        if (!text.isNullOrBlank() && text.trim().length > 2) {
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
-            if (bounds.width() > 50 && bounds.height() > 20) {
-                list.add(ContentWithPosition(text, bounds))
+            
+            // Only add if element is visible and has reasonable size
+            if (bounds.width() > 30 && bounds.height() > 15 && 
+                bounds.top >= 0 && bounds.left >= 0) {
+                
+                // Check if this looks like a URL or contains URL
+                val isUrl = text.contains("http://", ignoreCase = true) || 
+                           text.contains("https://", ignoreCase = true) ||
+                           text.contains("www.", ignoreCase = true) || 
+                           text.matches(Regex(".*[a-z0-9-]+\\.(com|net|org|xyz|top|link|icu|tk|ml|ga|cf|gq|site|online|click).*", RegexOption.IGNORE_CASE))
+                
+                list.add(ContentWithPosition(text.trim(), bounds, isUrl))
+                
+                if (isUrl) {
+                    Log.d(TAG, "Found URL-like content: '$text' at bounds: $bounds")
+                }
             }
         }
+        
+        // Recursively extract from children
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let {
                 extractContentWithPositions(it, list)
@@ -335,8 +482,6 @@ class ScreenReaderService : AccessibilityService() {
             }
         }
     }
-
-    data class ContentWithPosition(val text: String, val bounds: Rect)
 
     private fun showScanningAnimation() {
         try {
