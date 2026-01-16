@@ -18,6 +18,10 @@ import android.widget.*
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.cos
@@ -28,10 +32,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     companion object {
         private const val TAG = "ChatOverlayService"
         private const val CHANNEL_ID = "stremini_overlay"
+        private const val API_BASE_URL = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev"
         
-        // --- CALIBRATED FOR IMAGE MATCHING ---
-        private const val MENU_RADIUS_DP = 95f   // Increased distance so icons don't overlap
-        private const val BUTTON_SIZE_DP = 48    // Larger icon size to match the original
+        private const val MENU_RADIUS_DP = 95f
+        private const val BUTTON_SIZE_DP = 48
     }
 
     private lateinit var windowManager: WindowManager
@@ -55,9 +59,13 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
+
+    // Conversation history for context
+    private val conversationHistory = mutableListOf<JSONObject>()
 
     private fun dpToPx(dp: Int): Int {
         val density = resources.displayMetrics.density
@@ -118,17 +126,14 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     layoutParams.y = initialY + dy
                     windowManager.updateViewLayout(overlayView, layoutParams)
                     
-                    // If dragging while menu is open, move menu too or close it
                     if (isMenuVisible) updateMenuPosition()
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 if (!isDragging) {
-                    // This is a click -> Toggle Menu
                     toggleMenu()
                 } else {
-                    // Snap to edge logic
                     val screenWidth = resources.displayMetrics.widthPixels
                     layoutParams.x = if (layoutParams.x < screenWidth / 2) 0 else screenWidth - overlayView.width
                     windowManager.updateViewLayout(overlayView, layoutParams)
@@ -151,14 +156,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun showMenu() {
         if (menuView != null) return
 
-        // Rotate bubble to indicate open state
         bubbleIcon.animate().rotation(45f).setDuration(200).start()
         
         menuView = FrameLayout(this)
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
 
-        // Large container to prevent clipping icons
         val menuContainerSize = dpToPx((MENU_RADIUS_DP * 2.5).toInt())
         menuLayoutParams = WindowManager.LayoutParams(
             menuContainerSize, menuContainerSize, type,
@@ -175,7 +178,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun hideMenu() {
         if (!isMenuVisible) return
 
-        // Rotate bubble back to original state
         bubbleIcon.animate().rotation(0f).setDuration(200).start()
         
         menuView?.let {
@@ -191,7 +193,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         val bubbleHeight = overlayView.height
         val menuSize = menuLayoutParams!!.width
         
-        // Center the menu container over the bubble
         menuLayoutParams!!.x = layoutParams.x - (menuSize / 2) + (bubbleWidth / 2)
         menuLayoutParams!!.y = layoutParams.y - (menuSize / 2) + (bubbleHeight / 2)
         windowManager.updateViewLayout(menuView, menuLayoutParams)
@@ -208,7 +209,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             val screenWidth = resources.displayMetrics.widthPixels
             val isOnRightSide = (layoutParams.x + (overlayView.width / 2)) > (screenWidth / 2)
             
-            // Balanced angles for a perfect side-fan
             val angles = if (isOnRightSide) {
                 listOf(110, 145, 180, 215, 250) 
             } else {
@@ -253,7 +253,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
     
     private fun handleMenuItemClick(index: Int) {
-        // Close menu after clicking an option
         hideMenu()
         
         when (index) {
@@ -268,7 +267,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     private fun openChatbox() {
         if (isChatboxVisible) return
-        hideMenu() // Ensure menu is closed when opening chat
+        hideMenu()
+        
         chatboxView = LayoutInflater.from(this).inflate(R.layout.floating_chatbot_layout, null)
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
@@ -276,9 +276,14 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         chatboxLayoutParams = WindowManager.LayoutParams(
             (resources.displayMetrics.widthPixels * 0.85).toInt(),
             (resources.displayMetrics.heightPixels * 0.6).toInt(),
-            type, WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            type, 
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.BOTTOM or Gravity.END; x = 20; y = 100 }
+        ).apply { 
+            gravity = Gravity.BOTTOM or Gravity.END
+            x = 20
+            y = 100 
+        }
         
         setupChatbox()
         windowManager.addView(chatboxView, chatboxLayoutParams)
@@ -292,21 +297,26 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         val closeButton = chatboxView!!.findViewById<ImageView>(R.id.btn_close_chat)
         val scrollView = chatboxView!!.findViewById<ScrollView>(R.id.scroll_messages)
         
-        addBotMessage(messagesContainer, "Hello! I'm Stremini AI.")
+        // Add welcome message
+        addBotMessage(messagesContainer, "Hello! I'm Stremini AI. How can I help you today?")
         
         sendButton.setOnClickListener {
             val message = inputField.text.toString().trim()
             if (message.isNotEmpty()) {
                 addUserMessage(messagesContainer, message)
                 inputField.text.clear()
+                
                 serviceScope.launch {
                     scrollView.fullScroll(View.FOCUS_DOWN)
                     delay(100)
-                    addBotMessage(messagesContainer, sendMessageToAPI(message))
+                    
+                    val response = sendMessageToAPI(message)
+                    addBotMessage(messagesContainer, response)
                     scrollView.fullScroll(View.FOCUS_DOWN)
                 }
             }
         }
+        
         closeButton.setOnClickListener { closeChatbox() }
     }
     
@@ -322,27 +332,124 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         container.addView(v)
     }
     
-    private suspend fun sendMessageToAPI(message: String): String = withContext(Dispatchers.IO) {
-        "Response to: $message" 
+    private suspend fun sendMessageToAPI(userMessage: String): String = withContext(Dispatchers.IO) {
+        try {
+            // Add user message to history
+            conversationHistory.add(JSONObject().apply {
+                put("role", "user")
+                put("content", userMessage)
+            })
+            
+            // Keep only last 10 messages for context
+            if (conversationHistory.size > 10) {
+                conversationHistory.removeAt(0)
+            }
+            
+            // Prepare request body
+            val requestJson = JSONObject().apply {
+                put("message", userMessage)
+                put("conversationHistory", JSONArray(conversationHistory))
+            }
+            
+            Log.d(TAG, "Sending request: ${requestJson.toString(2)}")
+            
+            val requestBody = requestJson.toString()
+                .toRequestBody("application/json".toMediaType())
+            
+            val request = Request.Builder()
+                .url("$API_BASE_URL/chat/message")
+                .post(requestBody)
+                .addHeader("Content-Type", "application/json")
+                .addHeader("Accept", "application/json")
+                .build()
+            
+            val response = client.newCall(request).execute()
+            val responseBody = response.body?.string()
+            
+            Log.d(TAG, "Response code: ${response.code}")
+            Log.d(TAG, "Response body: $responseBody")
+            
+            if (!response.isSuccessful) {
+                return@withContext "⚠️ Server error: ${response.code}. Please try again."
+            }
+            
+            if (responseBody.isNullOrEmpty()) {
+                return@withContext "⚠️ Empty response from server."
+            }
+            
+            // Parse response
+            val json = JSONObject(responseBody)
+            
+            // Try different possible response fields
+            val reply = when {
+                json.has("response") -> json.getString("response")
+                json.has("reply") -> json.getString("reply")
+                json.has("message") -> json.getString("message")
+                else -> {
+                    Log.e(TAG, "Unknown response format: $responseBody")
+                    "⚠️ Unexpected response format from server."
+                }
+            }
+            
+            // Add bot response to history
+            if (reply.isNotEmpty() && !reply.startsWith("⚠️")) {
+                conversationHistory.add(JSONObject().apply {
+                    put("role", "assistant")
+                    put("content", reply)
+                })
+            }
+            
+            reply
+            
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.e(TAG, "Timeout error", e)
+            "⚠️ Request timed out. Please check your internet connection."
+        } catch (e: java.net.UnknownHostException) {
+            Log.e(TAG, "Network error", e)
+            "⚠️ Cannot reach server. Please check your internet connection."
+        } catch (e: org.json.JSONException) {
+            Log.e(TAG, "JSON parsing error", e)
+            "⚠️ Error parsing server response: ${e.message}"
+        } catch (e: Exception) {
+            Log.e(TAG, "API error", e)
+            "⚠️ Error: ${e.message ?: "Unknown error occurred"}"
+        }
     }
     
     private fun closeChatbox() {
-        chatboxView?.let { windowManager.removeView(it); chatboxView = null; isChatboxVisible = false }
+        chatboxView?.let { 
+            windowManager.removeView(it)
+            chatboxView = null
+            isChatboxVisible = false
+        }
     }
 
     private fun startForegroundService() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(CHANNEL_ID, "Stremini", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(
+                CHANNEL_ID, 
+                "Stremini AI Service", 
+                NotificationManager.IMPORTANCE_LOW
+            )
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
-        val n = NotificationCompat.Builder(this, CHANNEL_ID).setContentTitle("Stremini").setSmallIcon(R.mipmap.ic_launcher).build()
-        startForeground(1, n)
+        
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Stremini AI")
+            .setContentText("Floating assistant is active")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+        
+        startForeground(1, notification)
     }
 
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
         if (::overlayView.isInitialized) windowManager.removeView(overlayView)
-        hideMenu(); closeChatbox()
+        hideMenu()
+        closeChatbox()
+        conversationHistory.clear()
     }
-}
+}             
