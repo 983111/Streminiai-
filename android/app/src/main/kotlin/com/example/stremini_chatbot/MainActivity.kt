@@ -49,15 +49,19 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         
-        // Existing overlay channel
+        // Overlay channel for bubble controls
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             when (call.method) {
-                "hasOverlayPermission" -> result.success(hasOverlayPermission())
+                "hasOverlayPermission" -> {
+                    result.success(hasOverlayPermission())
+                }
                 "requestOverlayPermission" -> {
                     requestOverlayPermissionSafe()
                     result.success(true)
                 }
-                "hasAccessibilityPermission" -> result.success(isAccessibilityServiceEnabled())
+                "hasAccessibilityPermission" -> {
+                    result.success(isAccessibilityServiceEnabled())
+                }
                 "requestAccessibilityPermission" -> {
                     requestAccessibilityPermissionSafe()
                     result.success(true)
@@ -83,11 +87,15 @@ class MainActivity : FlutterActivity() {
             }
         }
 
-        // New keyboard channel
+        // Keyboard channel
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, keyboardChannelName).setMethodCallHandler { call, result ->
             when (call.method) {
-                "isKeyboardEnabled" -> result.success(isKeyboardEnabled())
-                "isKeyboardSelected" -> result.success(isKeyboardSelected())
+                "isKeyboardEnabled" -> {
+                    result.success(isKeyboardEnabled())
+                }
+                "isKeyboardSelected" -> {
+                    result.success(isKeyboardSelected())
+                }
                 "openKeyboardSettings" -> {
                     openKeyboardSettings()
                     result.success(true)
@@ -97,14 +105,21 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "openKeyboardSettingsActivity" -> {
-                    val intent = Intent(this, KeyboardSettingsActivity::class.java)
-                    startActivity(intent)
-                    result.success(true)
+                    try {
+                        val intent = Intent(this, KeyboardSettingsActivity::class.java)
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Error opening keyboard settings", e)
+                        result.error("ERROR", "Failed to open keyboard settings: ${e.message}", null)
+                    }
                 }
                 else -> result.notImplemented()
             }
         }
 
+        // Event channel for async updates
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, eventChannelName).setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -126,32 +141,51 @@ class MainActivity : FlutterActivity() {
     private fun requestOverlayPermissionSafe() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
                 Toast.makeText(this, "Please enable 'Display over other apps'", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
             Log.e("MainActivity", "Overlay setting error", e)
+            Toast.makeText(this, "Error opening settings: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
         val serviceName = "$packageName/${ScreenReaderService::class.java.canonicalName}"
-        val settingValue = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
+        val settingValue = Settings.Secure.getString(
+            contentResolver, 
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        
         val splitter = TextUtils.SimpleStringSplitter(':')
         splitter.setString(settingValue)
         while (splitter.hasNext()) {
-            if (splitter.next().equals(serviceName, ignoreCase = true)) return true
+            if (splitter.next().equals(serviceName, ignoreCase = true)) {
+                return true
+            }
         }
         return false
     }
 
     private fun requestAccessibilityPermissionSafe() {
-        val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
-        Toast.makeText(this, "Please find and enable 'Stremini Screen Scanner'", Toast.LENGTH_LONG).show()
+        try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            Toast.makeText(
+                this, 
+                "Please find and enable 'Stremini Screen Scanner'", 
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error opening accessibility settings", e)
+            Toast.makeText(this, "Error opening settings: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun startOverlayServiceSafe() {
@@ -166,67 +200,102 @@ class MainActivity : FlutterActivity() {
             } else {
                 startService(intent)
             }
+            Toast.makeText(this, "Floating bubble activated", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Log.e("MainActivity", "Overlay start error", e)
+            Toast.makeText(this, "Error starting service: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun startScreenScan() {
-        val intent = Intent(this, ScreenReaderService::class.java).apply {
-            action = ScreenReaderService.ACTION_START_SCAN
+        try {
+            val intent = Intent(this, ScreenReaderService::class.java).apply {
+                action = ScreenReaderService.ACTION_START_SCAN
+            }
+            startService(intent)
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error starting scan", e)
+            Toast.makeText(this, "Error starting scan: ${e.message}", Toast.LENGTH_SHORT).show()
         }
-        startService(intent)
     }
 
     // Keyboard-related methods
     private fun isKeyboardEnabled(): Boolean {
-        val imeManager = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        val enabledInputMethods = imeManager.enabledInputMethodList
-        val packageName = packageName
-        
-        return enabledInputMethods.any { 
-            it.packageName == packageName 
+        return try {
+            val imeManager = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+            val enabledInputMethods = imeManager?.enabledInputMethodList ?: return false
+            val packageName = packageName
+            
+            enabledInputMethods.any { 
+                it.packageName == packageName 
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error checking keyboard enabled", e)
+            false
         }
     }
 
     private fun isKeyboardSelected(): Boolean {
-        val currentInputMethod = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.DEFAULT_INPUT_METHOD
-        )
-        
-        return currentInputMethod?.contains(packageName) == true
+        return try {
+            val currentInputMethod = Settings.Secure.getString(
+                contentResolver,
+                Settings.Secure.DEFAULT_INPUT_METHOD
+            )
+            
+            currentInputMethod?.contains(packageName) == true
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error checking keyboard selected", e)
+            false
+        }
     }
 
     private fun openKeyboardSettings() {
-        val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
-        
-        Toast.makeText(
-            this,
-            "Find 'Stremini AI Keyboard' and enable it",
-            Toast.LENGTH_LONG
-        ).show()
+        try {
+            val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            
+            Toast.makeText(
+                this,
+                "Find 'Stremini AI Keyboard' and enable it",
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error opening keyboard settings", e)
+            Toast.makeText(this, "Error opening settings: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showKeyboardPicker() {
-        val imeManager = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-        imeManager.showInputMethodPicker()
+        try {
+            val imeManager = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
+            imeManager?.showInputMethodPicker()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error showing keyboard picker", e)
+            Toast.makeText(this, "Error showing picker: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        val filter = IntentFilter(ScreenReaderService.ACTION_SCAN_COMPLETE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(eventReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(eventReceiver, filter)
+        try {
+            val filter = IntentFilter(ScreenReaderService.ACTION_SCAN_COMPLETE)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(eventReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                registerReceiver(eventReceiver, filter)
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error registering receiver", e)
         }
     }
 
     override fun onPause() {
         super.onPause()
-        try { unregisterReceiver(eventReceiver) } catch (e: Exception) {}
+        try { 
+            unregisterReceiver(eventReceiver) 
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error unregistering receiver", e)
+        }
     }
 }
