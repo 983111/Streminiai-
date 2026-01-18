@@ -45,6 +45,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var menuView: View? = null
     private var menuLayoutParams: WindowManager.LayoutParams? = null
     private var isMenuVisible = false
+    private var chatInitialX = 0
+    private var chatInitialY = 0
+    private var chatInitialTouchX = 0f
+    private var chatInitialTouchY = 0f
+    private var isChatDragging = false
+
 
     private var chatboxView: View? = null
     private var chatboxLayoutParams: WindowManager.LayoutParams? = null
@@ -311,6 +317,36 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         if (isChatboxVisible) return
         
         chatboxView = LayoutInflater.from(this).inflate(R.layout.floating_chatbot_layout, null)
+        chatboxView!!.setOnTouchListener { _, event ->
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                chatInitialX = chatboxLayoutParams?.x ?: 0
+                chatInitialY = chatboxLayoutParams?.y ?: 0
+                chatInitialTouchX = event.rawX
+                chatInitialTouchY = event.rawY
+                isChatDragging = false
+                true
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                val dx = (event.rawX - chatInitialTouchX).toInt()
+                val dy = (event.rawY - chatInitialTouchY).toInt()
+
+                if (abs(dx) > 10 || abs(dy) > 10) {
+                    isChatDragging = true
+                    chatboxLayoutParams?.let {
+                        it.x = chatInitialX - dx
+                        it.y = chatInitialY - dy
+                        windowManager.updateViewLayout(chatboxView, it)
+                    }
+                }
+                true
+            }
+
+            MotionEvent.ACTION_UP -> true
+            else -> false
+        }
+    }
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
         
