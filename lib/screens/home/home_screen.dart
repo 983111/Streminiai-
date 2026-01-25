@@ -14,7 +14,8 @@ import '../../services/keyboard_service.dart';
 import '../chat_screen.dart';
 
 // Add keyboard provider
-final keyboardServiceProvider = Provider<KeyboardService>((ref) => KeyboardService());
+final keyboardServiceProvider =
+    Provider<KeyboardService>((ref) => KeyboardService());
 final keyboardStatusProvider = FutureProvider<KeyboardStatus>((ref) async {
   final service = ref.watch(keyboardServiceProvider);
   return await service.checkKeyboardStatus();
@@ -41,7 +42,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final state = ref.watch(homeControllerProvider);
     final controller = ref.read(homeControllerProvider.notifier);
     final keyboardStatus = ref.watch(keyboardStatusProvider);
-    
+
     ref.listen(homeControllerProvider, (previous, next) {
       if (next.errorMessage != null) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -65,13 +66,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           children: [
             _buildGreetingCard(context),
             const SizedBox(height: 32),
-            
+
             Text('AI Features', style: AppTextStyles.h2),
             const SizedBox(height: 16),
-            
+
             _buildSmartChatbotCard(context, state, controller),
             const SizedBox(height: 16),
-            
+
             // AI Keyboard Card
             keyboardStatus.when(
               data: (status) => _buildKeyboardCard(context, status),
@@ -79,14 +80,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               error: (_, __) => const SizedBox.shrink(),
             ),
             const SizedBox(height: 16),
-            
+
             _buildInfoCard(),
             const SizedBox(height: 32),
-            
+
             if (!state.permissionStatus.hasAll) ...[
               Text('Required Permissions', style: AppTextStyles.h3),
               const SizedBox(height: 12),
-              
               if (state.permissionStatus.needsOverlay)
                 PermissionCard(
                   title: 'Overlay Permission',
@@ -95,7 +95,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   color: AppColors.warning,
                   onTap: () => controller.requestOverlayPermission(),
                 ),
-              
               if (state.permissionStatus.needsAccessibility)
                 PermissionCard(
                   title: 'Accessibility Permission',
@@ -104,7 +103,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   color: AppColors.emotional,
                   onTap: () => controller.requestAccessibilityPermission(),
                 ),
-              
               const SizedBox(height: 16),
               AppContainer(
                 padding: const EdgeInsets.all(16),
@@ -117,7 +115,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     Expanded(
                       child: Text(
                         'Both permissions are required for the floating bubble to work properly',
-                        style: AppTextStyles.body3.copyWith(color: AppColors.info),
+                        style:
+                            AppTextStyles.body3.copyWith(color: AppColors.info),
                       ),
                     ),
                   ],
@@ -144,7 +143,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Image.asset(AppAssets.logo, width: 32, height: 32, fit: BoxFit.contain),
+          Image.asset(AppAssets.logo,
+              width: 32, height: 32, fit: BoxFit.contain),
           const SizedBox(width: 12),
           Text(AppConstants.appName, style: AppTextStyles.h2),
         ],
@@ -205,7 +205,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               Text(_getGreeting(), style: AppTextStyles.h1),
               const Spacer(),
               AppContainer(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 color: AppColors.white.withOpacity(0.1),
                 borderRadius: 20,
                 border: BorderSide(color: AppColors.white.withOpacity(0.2)),
@@ -215,7 +216,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.touch_app, color: AppColors.info.withOpacity(0.8), size: 16),
+                    Icon(Icons.touch_app,
+                        color: AppColors.info.withOpacity(0.8), size: 16),
                     const SizedBox(width: 4),
                     Text(
                       'Quick Chat',
@@ -255,8 +257,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     HomeState state,
     HomeController controller,
   ) {
-    final canToggle = state.permissionStatus.hasAll && !state.isLoading;
-    
     return FeatureCard(
       title: 'Smart Chatbot & Scam Detector',
       description: 'Floating AI assistant with real-time screen analyzer',
@@ -280,10 +280,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             )
           : Switch(
               value: state.bubbleActive,
-              onChanged: canToggle
-                  ? (value) async {
+              onChanged: state.isLoading
+                  ? null
+                  : (value) async {
                       final success = await controller.toggleBubble(value);
-                      if (success && mounted) {
+                      if (!success && mounted) {
+                        // Revert the switch if the operation failed
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content:
+                                const Text('Please grant permissions first'),
+                            backgroundColor: AppColors.warning,
+                          ),
+                        );
+                      } else if (success && mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content: Text(
@@ -291,12 +301,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                                   ? 'Floating bubble activated! Check your screen.'
                                   : 'Floating bubble deactivated',
                             ),
-                            backgroundColor: value ? AppColors.success : AppColors.lightGray,
+                            backgroundColor:
+                                value ? AppColors.success : AppColors.lightGray,
                           ),
                         );
                       }
-                    }
-                  : null,
+                    },
               activeColor: AppColors.primary,
             ),
     );
@@ -304,14 +314,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Widget _buildKeyboardCard(BuildContext context, KeyboardStatus status) {
     final keyboardService = ref.read(keyboardServiceProvider);
-    
+
     return FeatureCard(
       title: 'AI-Powered Keyboard',
       description: 'Smart typing with translation, completion & enhancement',
       icon: Icons.keyboard,
       iconColor: AppColors.secondary,
-      status: status.isActive ? 'Active' : status.isEnabled ? 'Enabled' : 'Disabled',
-      statusColor: status.isActive ? AppColors.success : status.isEnabled ? AppColors.warning : AppColors.lightGray,
+      status: status.isActive
+          ? 'Active'
+          : status.isEnabled
+              ? 'Enabled'
+              : 'Disabled',
+      statusColor: status.isActive
+          ? AppColors.success
+          : status.isEnabled
+              ? AppColors.warning
+              : AppColors.lightGray,
       badges: const [
         'Translate',
         'Complete',
@@ -343,17 +361,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         children: [
           Row(
             children: [
-              const Icon(Icons.info_outline, color: AppColors.scanCyan, size: 24),
+              const Icon(Icons.info_outline,
+                  color: AppColors.scanCyan, size: 24),
               const SizedBox(width: 12),
-              Text('How to use:', style: AppTextStyles.body2.copyWith(fontWeight: FontWeight.bold)),
+              Text('How to use:',
+                  style: AppTextStyles.body2
+                      .copyWith(fontWeight: FontWeight.bold)),
             ],
           ),
           const SizedBox(height: 12),
           const InfoStep(number: '1', text: 'Grant all required permissions'),
           const InfoStep(number: '2', text: 'Toggle Smart Chatbot ON'),
-          const InfoStep(number: '3', text: 'Tap the floating bubble to open menu'),
-          const InfoStep(number: '4', text: 'Use Scanner icon to detect scams on screen'),
-          const InfoStep(number: '5', text: 'Enable AI Keyboard for smart typing', color: AppColors.secondary),
+          const InfoStep(
+              number: '3', text: 'Tap the floating bubble to open menu'),
+          const InfoStep(
+              number: '4', text: 'Use Scanner icon to detect scams on screen'),
+          const InfoStep(
+              number: '5',
+              text: 'Enable AI Keyboard for smart typing',
+              color: AppColors.secondary),
         ],
       ),
     );

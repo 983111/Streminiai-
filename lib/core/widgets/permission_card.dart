@@ -9,7 +9,7 @@ class PermissionCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  
+
   const PermissionCard({
     super.key,
     required this.title,
@@ -18,7 +18,7 @@ class PermissionCard extends StatelessWidget {
     required this.color,
     required this.onTap,
   });
-  
+
   @override
   Widget build(BuildContext context) {
     return AppContainer(
@@ -53,7 +53,8 @@ class PermissionCard extends StatelessWidget {
               onPressed: onTap,
               style: TextButton.styleFrom(
                 backgroundColor: color.withOpacity(0.2),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               ),
               child: Text(
                 'Enable',

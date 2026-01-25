@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.example.stremini_chatbot"
     compileSdk = 34
+    ndkVersion = "29.0.14206865"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
