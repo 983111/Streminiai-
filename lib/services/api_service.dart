@@ -5,10 +5,10 @@ import 'package:http/http.dart' as http;
 class ApiService {
   static const String baseUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev";
 
-  // Chat endpoints - FIXED
+  // Chat endpoints
   Future<String> sendMessage(String userMessage, {String? attachment, String? mimeType, String? fileName}) async {
     try {
-      // FIX: Explicitly type as Map<String, dynamic> so it can hold both String and Map values
+      // FIX: Explicitly typed as Map<String, dynamic>
       final Map<String, dynamic> bodyMap = {
         "message": userMessage,
       };
@@ -35,19 +35,15 @@ class ApiService {
         
         // Handle different response structures
         if (data is Map) {
-          // Check for 'response' field (matches backend)
           if (data.containsKey('response')) {
             return data['response'] as String? ?? "⚠️ Empty reply from AI.";
           }
-          // Check for 'reply' field
           if (data.containsKey('reply')) {
             return data['reply'] as String? ?? "⚠️ Empty reply from AI.";
           }
-          // Check for 'message' field
           if (data.containsKey('message')) {
             return data['message'] as String? ?? "⚠️ Empty reply from AI.";
           }
-          // If data is directly a string
           return data.toString();
         } else if (data is String) {
           return data;
@@ -69,7 +65,7 @@ class ApiService {
     }
   }
 
-  // Chat streaming endpoint (for future use)
+  // Streaming endpoint
   Stream<String> streamMessage(String userMessage) async* {
     try {
       final request = http.Request(
@@ -86,7 +82,6 @@ class ApiService {
 
       if (streamedResponse.statusCode == 200) {
         await for (var chunk in streamedResponse.stream.transform(utf8.decoder)) {
-          // Parse SSE format: data: {...}
           final lines = chunk.split('\n');
           for (var line in lines) {
             if (line.startsWith('data: ')) {
@@ -97,9 +92,7 @@ class ApiService {
                   if (data is Map && data.containsKey('token')) {
                     yield data['token'] as String;
                   }
-                } catch (_) {
-                  // Skip invalid JSON
-                }
+                } catch (_) {}
               }
             }
           }
@@ -112,7 +105,7 @@ class ApiService {
     }
   }
 
-  // Security - Scan content for scams/phishing
+  // Security - Scan content
   Future<SecurityScanResult> scanContent(String content) async {
     try {
       final response = await http.post(
@@ -135,7 +128,7 @@ class ApiService {
     }
   }
 
-  // Automation - Parse voice commands
+  // Automation - Voice commands
   Future<VoiceCommandResult> parseVoiceCommand(String command) async {
     try {
       final response = await http.post(
@@ -158,7 +151,7 @@ class ApiService {
     }
   }
 
-  // Translation - Translate screen content
+  // Translation - Screen content
   Future<String> translateScreen(String content, String targetLanguage) async {
     try {
       final response = await http.post(
@@ -184,7 +177,7 @@ class ApiService {
     }
   }
 
-  // Keyboard - Text completion
+  // Keyboard - Completion
   Future<String> completeText(String incompleteText) async {
     try {
       final response = await http.post(
@@ -207,7 +200,7 @@ class ApiService {
     }
   }
 
-  // Keyboard - Rewrite text in tone
+  // Keyboard - Tone rewrite
   Future<String> rewriteInTone(String text, String tone) async {
     try {
       final response = await http.post(
@@ -230,7 +223,7 @@ class ApiService {
     }
   }
 
-  // Keyboard - Translate text
+  // Keyboard - Translate
   Future<String> translateText(String text, String targetLanguage) async {
     try {
       final response = await http.post(
@@ -253,7 +246,7 @@ class ApiService {
     }
   }
 
-  // Health check endpoint
+  // Health check
   Future<Map<String, dynamic>> checkHealth() async {
     try {
       final response = await http.get(
@@ -281,7 +274,7 @@ class ApiService {
 // Models
 class SecurityScanResult {
   final bool isSafe;
-  final String riskLevel; // "safe", "warning", "danger"
+  final String riskLevel;
   final List<String> tags;
   final String analysis;
 
@@ -319,5 +312,4 @@ class VoiceCommandResult {
   }
 }
 
-// Providers
 final apiServiceProvider = Provider<ApiService>((ref) => ApiService());
