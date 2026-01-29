@@ -14,7 +14,7 @@ class ApiService {
       };
 
       if (attachment != null) {
-        bodyMap["attachment"] = {
+        bodyMap["attachment"] = <String, dynamic>{
           "data": attachment,
           "mime": mimeType,
           "name": fileName
