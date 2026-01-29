@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.example.stremini_chatbot"
-    compileSdk = 34
+    // UPDATED: 34 -> 36 (Required by image_picker)
+    compileSdk = 36
     ndkVersion = "29.0.14206865"
 
     compileOptions {
