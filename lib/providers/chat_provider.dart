@@ -8,7 +8,6 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
 
   @override
   FutureOr<List<Message>> build() {
-    // Initialize session when chat starts
     ref.read(apiServiceProvider).initSession();
     
     return [
@@ -21,10 +20,8 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
     ];
   }
 
-  // Updated signature to accept attachment
   Future<void> sendMessage(String text, {String? attachment, String? mimeType, String? fileName}) async {
     final trimmed = text.trim();
-    // Allow empty text if sending a file
     if (trimmed.isEmpty && attachment == null) return;
 
     final displayCheck = trimmed.isEmpty ? "Sent an attachment: $fileName" : trimmed;
@@ -44,7 +41,6 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
 
     try {
       final api = ref.read(apiServiceProvider);
-      // Pass attachment data
       final reply = await api.sendMessage(trimmed, attachment: attachment, mimeType: mimeType, fileName: fileName);
 
       removeTypingIndicator();
@@ -81,7 +77,6 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
     state = AsyncValue.data(current.where((m) => m.type != MessageType.typing).toList());
   }
 
-  // Clear session when chat is cleared
   Future<void> clearChat() async {
     await ref.read(apiServiceProvider).clearSession();
     state = AsyncValue.data([
