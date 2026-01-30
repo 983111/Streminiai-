@@ -121,13 +121,15 @@ class ApiService {
         "Accept": "text/event-stream",
       });
       
-      final bodyMap = {
+      // FIX 1: Explicitly type the map
+      final Map<String, dynamic> bodyMap = {
         "message": userMessage,
       };
       
       // Include session ID if exists
       if (_sessionId != null) {
-        bodyMap["sessionId"] = _sessionId;
+        // FIX 2: Use (!) because we already checked it is not null
+        bodyMap["sessionId"] = _sessionId!;
       }
       
       request.body = jsonEncode(bodyMap);
