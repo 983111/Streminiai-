@@ -17,7 +17,6 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Stremini AI',
       theme: AppTheme.darkTheme,
-      // Wrap with SessionLifecycleManager for automatic session cleanup
       home: const SessionLifecycleManager(
         child: HomeScreen(),
       ),
