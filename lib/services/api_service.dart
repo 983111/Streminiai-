@@ -1,17 +1,56 @@
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
   static const String baseUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev";
+  
+  String? _sessionId;
+
+  // Load session ID from storage on init
+  Future<void> initSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    _sessionId = prefs.getString('chat_session_id');
+  }
+
+  // Save session ID to storage
+  Future<void> _saveSessionId(String sessionId) async {
+    _sessionId = sessionId;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('chat_session_id', sessionId);
+  }
+
+  // Clear session
+  Future<void> clearSession() async {
+    if (_sessionId != null) {
+      // Notify backend to delete session
+      try {
+        await http.delete(
+          Uri.parse("$baseUrl/chat/session/$_sessionId"),
+          headers: {"Content-Type": "application/json"},
+        );
+      } catch (e) {
+        print('Error clearing session on backend: $e');
+      }
+    }
+    
+    _sessionId = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('chat_session_id');
+  }
 
   // Chat endpoints
   Future<String> sendMessage(String userMessage, {String? attachment, String? mimeType, String? fileName}) async {
     try {
-      // FIX: Explicitly typed as Map<String, dynamic>
       final Map<String, dynamic> bodyMap = {
         "message": userMessage,
       };
+
+      // Include session ID if exists
+      if (_sessionId != null) {
+        bodyMap["sessionId"] = _sessionId;
+      }
 
       if (attachment != null) {
         bodyMap["attachment"] = <String, dynamic>{
@@ -32,6 +71,11 @@ class ApiService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        
+        // Save session ID from response
+        if (data.containsKey('sessionId')) {
+          await _saveSessionId(data['sessionId']);
+        }
         
         // Handle different response structures
         if (data is Map) {
@@ -76,7 +120,17 @@ class ApiService {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
       });
-      request.body = jsonEncode({"message": userMessage});
+      
+      final bodyMap = {
+        "message": userMessage,
+      };
+      
+      // Include session ID if exists
+      if (_sessionId != null) {
+        bodyMap["sessionId"] = _sessionId;
+      }
+      
+      request.body = jsonEncode(bodyMap);
 
       final streamedResponse = await request.send();
 
@@ -84,11 +138,19 @@ class ApiService {
         await for (var chunk in streamedResponse.stream.transform(utf8.decoder)) {
           final lines = chunk.split('\n');
           for (var line in lines) {
+            if (line.startsWith('event: session')) {
+              // Next line contains session data
+              continue;
+            }
             if (line.startsWith('data: ')) {
               final jsonStr = line.substring(6);
               if (jsonStr.trim().isNotEmpty && jsonStr != '[DONE]') {
                 try {
                   final data = jsonDecode(jsonStr);
+                  // Save session ID if present
+                  if (data is Map && data.containsKey('sessionId')) {
+                    await _saveSessionId(data['sessionId']);
+                  }
                   if (data is Map && data.containsKey('token')) {
                     yield data['token'] as String;
                   }
@@ -250,7 +312,7 @@ class ApiService {
   Future<Map<String, dynamic>> checkHealth() async {
     try {
       final response = await http.get(
-        Uri.parse(baseUrl),
+        Uri.parse("$baseUrl/chat/health"),
         headers: {"Accept": "application/json"},
       );
 
@@ -312,4 +374,8 @@ class VoiceCommandResult {
   }
 }
 
-final apiServiceProvider = Provider<ApiService>((ref) => ApiService());
+final apiServiceProvider = Provider<ApiService>((ref) {
+  final service = ApiService();
+  service.initSession();
+  return service;
+});
