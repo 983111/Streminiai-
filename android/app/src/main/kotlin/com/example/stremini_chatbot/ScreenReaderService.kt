@@ -35,9 +35,9 @@ class ScreenReaderService : AccessibilityService() {
         private var instance: ScreenReaderService? = null
         fun isRunning(): Boolean = instance != null
         
-        // Exact Red color from your screenshot
-        private val DANGER_COLOR = Color.parseColor("#B71C1C")
-        private val SAFE_COLOR = Color.parseColor("#1B5E20")
+        // Colors
+        private val DANGER_COLOR = Color.parseColor("#B71C1C") // Red
+        private val SAFE_COLOR = Color.parseColor("#1B5E20")   // Green
     }
 
     private lateinit var windowManager: WindowManager
@@ -51,6 +51,7 @@ class ScreenReaderService : AccessibilityService() {
     private var isScanning = false
     private var tagsVisible = false
 
+    // Data Models
     data class ScanResult(
         val isSafe: Boolean,
         val riskLevel: String,
@@ -166,22 +167,30 @@ class ScreenReaderService : AccessibilityService() {
         }
     }
 
+    // ==========================================
+    // UI DISPLAY LOGIC
+    // ==========================================
     private fun displayTagsForAllThreats(contentList: List<ContentWithPosition>, result: ScanResult) {
         clearTags()
         
+        // 1. Setup Full Screen Container (Absolute Positioning)
         tagsContainer = FrameLayout(this)
-        val params = WindowManager.LayoutParams(
+        val containerParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN, 
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or // Crucial for absolute coords
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS, 
             PixelFormat.TRANSLUCENT
         )
-        windowManager.addView(tagsContainer, params)
+        containerParams.gravity = Gravity.TOP or Gravity.START
+        containerParams.x = 0
+        containerParams.y = 0
+        windowManager.addView(tagsContainer, containerParams)
 
-        // 1. BANNER LOGIC
+        // 2. Banner Logic
         val linkThreats = result.taggedElements.count { !it.url.isNullOrEmpty() }
         val bannerText: String
         val bannerDetail: String
@@ -205,17 +214,13 @@ class ScreenReaderService : AccessibilityService() {
 
         createBanner(bannerText, bannerColor, bannerDetail, result.isSafe)
 
-        // 2. TAGGING LOGIC
+        // 3. Tag Logic (STRICT POSITIONING)
         if (!result.isSafe) {
             val taggedPositions = mutableListOf<Pair<Int, Int>>()
             
             result.taggedElements.forEach { tag ->
                 if (tag.url != null && tag.url.isNotEmpty()) {
-                    // --- URL MATCHING STRATEGY ---
-                    // 1. Exact Match
-                    // 2. Contains Match
-                    // 3. Hostname Match (e.g. finds "bad-site.com" even if url is "http://bad-site.com")
-                    
+                    // --- URL MATCHING ---
                     val host = try { URI(tag.url).host ?: tag.url } catch(e: Exception) { tag.url }
                     
                     val matches = contentList.filter { 
@@ -227,27 +232,16 @@ class ScreenReaderService : AccessibilityService() {
                     if (matches.isNotEmpty()) {
                         matches.forEach { match ->
                             val posKey = Pair(match.bounds.left, match.bounds.top)
-                            
-                            // Prevent overlapping tags
                             if (!isPositionTagged(taggedPositions, posKey)) {
                                 createFloatingTag(match.bounds, "⚠️ WARNING", DANGER_COLOR) 
                                 taggedPositions.add(posKey)
                             }
                         }
-                    } else {
-                        // Fallback: If specific URL match fails, tag ANY URL-like element found
-                        val anyUrl = contentList.find { it.isUrl }
-                        if (anyUrl != null) {
-                            val posKey = Pair(anyUrl.bounds.left, anyUrl.bounds.top)
-                            if (!isPositionTagged(taggedPositions, posKey)) {
-                                createFloatingTag(anyUrl.bounds, "⚠️ WARNING", DANGER_COLOR)
-                                taggedPositions.add(posKey)
-                            }
-                        }
-                    }
+                    } 
+                    // NOTE: REMOVED "Fallback to Center" logic here. 
+                    // If we can't find the link position, we ONLY show the Banner.
                 } else {
                     // --- TEXT MATCHING ---
-                    // Match "urgent", "password", etc.
                     val keywords = tag.reason.lowercase().split(" ")
                         .filter { it.length > 4 && !it.matches(Regex(".*[0-9%].*")) }
                     
@@ -262,9 +256,8 @@ class ScreenReaderService : AccessibilityService() {
                             createFloatingTag(relatedContent.bounds, "⚠️ SCAM ALERT", DANGER_COLOR)
                             taggedPositions.add(posKey)
                         }
-                    } else {
-                        createGeneralThreatTag(tag.label, DANGER_COLOR)
                     }
+                    // NOTE: REMOVED "Fallback to Center" logic here too.
                 }
             }
         }
@@ -276,12 +269,9 @@ class ScreenReaderService : AccessibilityService() {
         }
     }
 
-    private fun createGeneralThreatTag(label: String, color: Int) {
-        val screenWidth = resources.displayMetrics.widthPixels
-        val screenHeight = resources.displayMetrics.heightPixels
-        val fakeBounds = Rect(screenWidth / 2 - 100, screenHeight / 3, screenWidth / 2 + 100, screenHeight / 3 + 50)
-        createFloatingTag(fakeBounds, label, color)
-    }
+    // ==========================================
+    // UI COMPONENTS
+    // ==========================================
 
     private fun createBanner(title: String, color: Int, subtitle: String, isSafe: Boolean) {
         val context = this
@@ -368,20 +358,20 @@ class ScreenReaderService : AccessibilityService() {
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            // CRITICAL FIX: Explicit Gravity to ensure margins act as Absolute Coordinates
-            gravity = Gravity.TOP or Gravity.LEFT 
-
-            // Horizontal
+            // STRICT ABSOLUTE POSITIONING
+            gravity = Gravity.TOP or Gravity.LEFT
+            
+            // X Position
             leftMargin = bounds.left.coerceAtLeast(10)
             
-            // Vertical
+            // Y Position logic
             val tagHeight = 80
-            val spaceAbove = bounds.top - 200 // Subtract banner space
+            val spaceAbove = bounds.top - 200 // Banner space buffer
             
             if (spaceAbove > tagHeight) {
-                topMargin = bounds.top - tagHeight + 10
+                topMargin = bounds.top - tagHeight + 10 // Above
             } else {
-                topMargin = bounds.bottom + 10
+                topMargin = bounds.bottom + 10 // Below if crowded
             }
         }
         
@@ -394,8 +384,8 @@ class ScreenReaderService : AccessibilityService() {
             val bounds = Rect()
             node.getBoundsInScreen(bounds)
             
-            if (bounds.width() > 30 && bounds.height() > 15 && bounds.top >= 0 && bounds.left >= 0) {
-                // Expanded URL Detection Logic
+            // Ignore (0,0,0,0) bounds or tiny invisible elements
+            if (bounds.width() > 10 && bounds.height() > 10 && bounds.left >= 0 && bounds.top >= 0) {
                 val t = text.lowercase()
                 val isUrl = t.contains("http") || t.contains("www.") || t.contains(".com") || 
                            t.contains(".net") || t.contains(".org") || t.contains(".xyz")
