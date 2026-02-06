@@ -1,14 +1,17 @@
 package com.example.stremini_chatbot
 
 import android.content.Context
-import android.graphics.Color
 import android.inputmethodservice.InputMethodService
-import android.view.Gravity
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
+import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
-import android.widget.*
-import androidx.cardview.widget.CardView
+import android.view.inputmethod.InputConnection
+import android.widget.TextView
+import android.widget.Toast
 import kotlinx.coroutines.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -32,534 +35,180 @@ class StreminiIME : InputMethodService() {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    // UI Components
-    private lateinit var keyboardView: ViewGroup
-    private lateinit var inputField: EditText
-    private lateinit var suggestionsBar: HorizontalScrollView
-    private lateinit var quickActionsBar: HorizontalScrollView
-    private lateinit var loadingIndicator: ProgressBar
-    
     // State
     private var currentAppContext = "general"
-    private var conversationHistory = mutableListOf<String>()
-    private var currentSuggestions = listOf<String>()
-    private var isLoading = false
+    private var lastComposedText = ""
 
     override fun onCreateInputView(): View {
-        keyboardView = createModernKeyboardView()
         isActive = true
-        return keyboardView
+        val view = layoutInflater.inflate(R.layout.keyboard_layout, null)
+        setupKeyboardInteractions(view)
+        return view
     }
 
-    private fun createModernKeyboardView(): ViewGroup {
-        val mainLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#000000"))
-            setPadding(0, dpToPx(4), 0, dpToPx(4))
-            // CRITICAL: Set proper height to not cover entire screen
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        // Add AI Input Section
-        mainLayout.addView(createAIInputSection())
-        
-        // Add Suggestions Bar
-        mainLayout.addView(createSuggestionsBar())
-        
-        // Add Quick Actions
-        mainLayout.addView(createQuickActionsBar())
-        
-        // Add Keyboard Keys
-        mainLayout.addView(createKeyboardSection())
-
-        return mainLayout
-    }
-
-    private fun dpToPx(dp: Int): Int {
-        return (dp * resources.displayMetrics.density).toInt()
-    }
-
-    private fun createAIInputSection(): View {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        // Voice button
-        val btnVoice = createIconButton(android.R.drawable.ic_btn_speak_now, "#23A6E2") {
-            Toast.makeText(this, "Voice input coming soon", Toast.LENGTH_SHORT).show()
-        }
-        container.addView(btnVoice)
-
-        // Input field container
-        val inputContainer = CardView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                weight = 1f
-                setMargins(dpToPx(4), 0, dpToPx(4), 0)
-            }
-            radius = dpToPx(20).toFloat()
-            cardElevation = dpToPx(2).toFloat()
-            setCardBackgroundColor(Color.parseColor("#1A1A1A"))
-        }
-
-        val inputLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        inputField = EditText(this).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                weight = 1f
-            }
-            hint = "Type with AI..."
-            setHintTextColor(Color.parseColor("#666666"))
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            background = null
-            maxLines = 2
+    private fun setupKeyboardInteractions(view: View) {
+        // Map all standard keys
+        val keyMap = mapOf(
+            R.id.key_q to "q", R.id.key_w to "w", R.id.key_e to "e", R.id.key_r to "r", R.id.key_t to "t",
+            R.id.key_y to "y", R.id.key_u to "u", R.id.key_i to "i", R.id.key_o to "o", R.id.key_p to "p",
+            R.id.key_a to "a", R.id.key_s to "s", R.id.key_d to "d", R.id.key_f to "f", R.id.key_g to "g",
+            R.id.key_h to "h", R.id.key_j to "j", R.id.key_k to "k", R.id.key_l to "l",
+            R.id.key_z to "z", R.id.key_x to "x", R.id.key_c to "c", R.id.key_v to "v", R.id.key_b to "b",
+            R.id.key_n to "n", R.id.key_m to "m",
             
-            addTextChangedListener(object : android.text.TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: android.text.Editable?) {
-                    val text = s?.toString() ?: ""
-                    if (text.length > 2) {
-                        getSuggestionsDebounced(text)
-                    } else {
-                        clearSuggestions()
-                    }
-                }
-            })
-        }
-
-        loadingIndicator = ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
-            layoutParams = LinearLayout.LayoutParams(dpToPx(20), dpToPx(20)).apply {
-                setMargins(dpToPx(4), 0, 0, 0)
-            }
-            indeterminateDrawable?.setColorFilter(
-                Color.parseColor("#23A6E2"),
-                android.graphics.PorterDuff.Mode.SRC_IN
-            )
-            visibility = View.GONE
-        }
-
-        inputLayout.addView(inputField)
-        inputLayout.addView(loadingIndicator)
-        inputContainer.addView(inputLayout)
-        container.addView(inputContainer)
-
-        // Send button
-        val btnSend = createIconButton(android.R.drawable.ic_menu_send, "#23A6E2") {
-            commitCurrentText()
-        }
-        container.addView(btnSend)
-
-        return container
-    }
-
-    private fun createSuggestionsBar(): HorizontalScrollView {
-        suggestionsBar = HorizontalScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, dpToPx(4), 0, dpToPx(4))
-            }
-            isHorizontalScrollBarEnabled = false
-        }
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dpToPx(8), 0, dpToPx(8), 0)
-        }
-
-        suggestionsBar.addView(container)
-        return suggestionsBar
-    }
-
-    private fun createQuickActionsBar(): HorizontalScrollView {
-        quickActionsBar = HorizontalScrollView(this).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, dpToPx(4), 0, dpToPx(4))
-            }
-            isHorizontalScrollBarEnabled = false
-        }
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(dpToPx(8), 0, dpToPx(8), 0)
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        // AI action buttons
-        val actions = listOf(
-            Triple("✨", "Complete", ::handleComplete),
-            Triple("✓", "Correct", ::handleCorrect),
-            Triple("🎨", "Tone", ::handleTone),
-            Triple("🌐", "Translate", ::handleTranslate),
-            Triple("📝", "Expand", ::handleExpand),
-            Triple("😊", "Emoji", ::handleEmoji)
+            R.id.key_1 to "1", R.id.key_2 to "2", R.id.key_3 to "3", R.id.key_4 to "4", R.id.key_5 to "5",
+            R.id.key_6 to "6", R.id.key_7 to "7", R.id.key_8 to "8", R.id.key_9 to "9", R.id.key_0 to "0",
+            
+            R.id.key_dot to ".", R.id.key_comma to ","
         )
 
-        actions.forEach { (icon, label, action) ->
-            container.addView(createAIActionButton(icon, label, action))
-        }
-
-        quickActionsBar.addView(container)
-        return quickActionsBar
-    }
-
-    private fun createAIActionButton(icon: String, label: String, action: () -> Unit): View {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(dpToPx(3), 0, dpToPx(3), 0)
-            }
-            
-            isClickable = true
-            isFocusable = true
-            
-            setOnClickListener {
-                animateClick(this)
-                action()
+        keyMap.forEach { (id, char) ->
+            view.findViewById<View>(id)?.setOnClickListener {
+                playClick(it)
+                commitText(char)
             }
         }
 
-        val iconText = TextView(this).apply {
-            text = icon
-            textSize = 18f
-            gravity = Gravity.CENTER
-            setPadding(dpToPx(10), dpToPx(10), dpToPx(10), dpToPx(10))
-            background = createCircleGradientDrawable()
+        // Special Keys
+        view.findViewById<View>(R.id.key_space)?.setOnClickListener {
+            playClick(it)
+            commitText(" ")
         }
 
-        val labelText = TextView(this).apply {
-            text = label
-            textSize = 9f
-            setTextColor(Color.parseColor("#AAAAAA"))
-            gravity = Gravity.CENTER
-            setPadding(0, dpToPx(3), 0, 0)
+        view.findViewById<View>(R.id.key_backspace)?.setOnClickListener {
+            playClick(it)
+            handleBackspace()
         }
-
-        container.addView(iconText)
-        container.addView(labelText)
-
-        return container
-    }
-
-    private fun createKeyboardSection(): View {
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        // Number row
-        container.addView(createKeyRow(listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0")))
         
-        // Top row
-        container.addView(createKeyRow(listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p")))
+        // Hold backspace to delete continuously
+        view.findViewById<View>(R.id.key_backspace)?.setOnLongClickListener {
+            // Implementation for continuous delete could go here
+             handleBackspace()
+             true
+        }
+
+        view.findViewById<View>(R.id.key_enter)?.setOnClickListener {
+            playClick(it)
+            sendDefaultEditorAction(true)
+        }
+
+        view.findViewById<View>(R.id.key_shift)?.setOnClickListener {
+             playClick(it)
+             // Shift toggle implementation (simple caps lock for now or just single char)
+             // For simplicity, just toggling uppercase could be complex without UI update.
+             // We'll leave as placeholder or single char uppercase if we track state.
+        }
+
+        view.findViewById<View>(R.id.key_voice)?.setOnClickListener {
+             playClick(it)
+             Toast.makeText(this, "Voice input coming soon", Toast.LENGTH_SHORT).show()
+        }
+
+        // AI Actions
+        view.findViewById<View>(R.id.action_improve)?.setOnClickListener {
+            playClick(it)
+            handleModifyText("improve")
+        }
+
+        view.findViewById<View>(R.id.action_complete)?.setOnClickListener {
+            playClick(it)
+            handleComplete()
+        }
         
-        // Middle row
-        container.addView(createKeyRow(listOf("a", "s", "d", "f", "g", "h", "j", "k", "l"), 0.5f))
+        view.findViewById<View>(R.id.action_tone)?.setOnClickListener {
+             playClick(it)
+             handleModifyText("tone")
+        }
         
-        // Bottom row
-        val bottomRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, dpToPx(2), 0, dpToPx(2))
-            }
-        }
-
-        bottomRow.addView(createSpecialKey("⇧", 1.5f) {})
-        listOf("z", "x", "c", "v", "b", "n", "m").forEach { key ->
-            bottomRow.addView(createKey(key))
-        }
-        bottomRow.addView(createSpecialKey("⌫", 1.5f) { deleteText() })
-
-        container.addView(bottomRow)
-
-        // Space row
-        val spaceRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, dpToPx(2), 0, 0)
-            }
-        }
-
-        spaceRow.addView(createSpecialKey("?123", 1.2f) {})
-        spaceRow.addView(createSpecialKey(",", 1f) { commitText(",") })
-        spaceRow.addView(createSpecialKey("Space", 4f) { commitText(" ") })
-        spaceRow.addView(createSpecialKey(".", 1f) { commitText(".") })
-        spaceRow.addView(createSpecialKey("↵", 1.5f) { sendDefaultEditorAction(true) })
-
-        container.addView(spaceRow)
-
-        return container
-    }
-
-    private fun createKeyRow(keys: List<String>, startWeight: Float = 0f): View {
-        val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(0, dpToPx(2), 0, dpToPx(2))
-            }
-        }
-
-        if (startWeight > 0) {
-            row.addView(Space(this).apply {
-                layoutParams = LinearLayout.LayoutParams(0, 1).apply { weight = startWeight }
-            })
-        }
-
-        keys.forEach { key -> row.addView(createKey(key)) }
-
-        if (startWeight > 0) {
-            row.addView(Space(this).apply {
-                layoutParams = LinearLayout.LayoutParams(0, 1).apply { weight = startWeight }
-            })
-        }
-
-        return row
-    }
-
-    private fun createKey(key: String): View {
-        return TextView(this).apply {
-            text = key
-            textSize = 16f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, dpToPx(45)).apply {
-                weight = 1f
-                setMargins(dpToPx(2), dpToPx(2), dpToPx(2), dpToPx(2))
-            }
-            background = createKeyBackgroundDrawable()
-            isClickable = true
-            
-            setOnClickListener {
-                animateKeyPress(this)
-                commitText(key)
-                inputField.append(key)
-            }
+        view.findViewById<View>(R.id.action_undo)?.setOnClickListener {
+             playClick(it)
+             // Undo implementation would require tracking history
+             Toast.makeText(this, "Undo not available yet", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun createSpecialKey(label: String, weight: Float, action: () -> Unit): View {
-        return TextView(this).apply {
-            text = label
-            textSize = 14f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(0, dpToPx(45)).apply {
-                this.weight = weight
-                setMargins(dpToPx(2), dpToPx(2), dpToPx(2), dpToPx(2))
-            }
-            background = createSpecialKeyBackgroundDrawable()
-            isClickable = true
-            
-            setOnClickListener {
-                animateKeyPress(this)
-                action()
-            }
-        }
-    }
-
-    private fun createIconButton(icon: Int, color: String, action: () -> Unit): View {
-        return ImageButton(this).apply {
-            setImageResource(icon)
-            setColorFilter(Color.parseColor(color))
-            layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40)).apply {
-                setMargins(dpToPx(2), 0, dpToPx(2), 0)
-            }
-            background = createCircleGradientDrawable()
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(dpToPx(6), dpToPx(6), dpToPx(6), dpToPx(6))
-            
-            setOnClickListener {
-                animateClick(this)
-                action()
-            }
-        }
-    }
-
-    private fun createKeyBackgroundDrawable() = android.graphics.drawable.GradientDrawable().apply {
-        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-        setColor(Color.parseColor("#1A1A1A"))
-        cornerRadius = dpToPx(8).toFloat()
-        setStroke(1, Color.parseColor("#333333"))
-    }
-
-    private fun createSpecialKeyBackgroundDrawable() = android.graphics.drawable.GradientDrawable().apply {
-        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-        setColor(Color.parseColor("#2A2A2A"))
-        cornerRadius = dpToPx(8).toFloat()
-        setStroke(1, Color.parseColor("#444444"))
-    }
-
-    private fun createCircleGradientDrawable() = android.graphics.drawable.GradientDrawable().apply {
-        shape = android.graphics.drawable.GradientDrawable.OVAL
-        colors = intArrayOf(Color.parseColor("#23A6E2"), Color.parseColor("#0066FF"))
-    }
-
-    private fun animateKeyPress(view: View) {
+    private fun playClick(view: View) {
         view.animate().scaleX(0.9f).scaleY(0.9f).setDuration(50).withEndAction {
             view.animate().scaleX(1f).scaleY(1f).setDuration(50).start()
         }.start()
     }
 
-    private fun animateClick(view: View) {
-        view.animate().scaleX(0.9f).scaleY(0.9f).setDuration(100).withEndAction {
-            view.animate().scaleX(1f).scaleY(1f).setDuration(100).start()
-        }.start()
+    private fun commitText(text: String) {
+        currentInputConnection?.commitText(text, 1)
     }
 
-    private var suggestionsJob: Job? = null
+    private fun handleBackspace() {
+        currentInputConnection?.deleteSurroundingText(1, 0)
+    }
 
-    private fun getSuggestionsDebounced(text: String) {
-        suggestionsJob?.cancel()
-        suggestionsJob = serviceScope.launch {
-            delay(500)
-            getSuggestions(text)
+    private fun getCurrentText(): String {
+        // Get text before cursor (up to 1000 chars)
+        val before = currentInputConnection?.getTextBeforeCursor(1000, 0) ?: ""
+        // Get text after cursor (optional, but good for context)
+        val after = currentInputConnection?.getTextAfterCursor(1000, 0) ?: ""
+        return before.toString() + after.toString()
+    }
+
+    // --- AI Features ---
+
+    private fun handleModifyText(action: String) {
+        val originalText = getCurrentText()
+        if (originalText.isBlank()) {
+             Toast.makeText(this, "Type something first!", Toast.LENGTH_SHORT).show()
+             return
         }
-    }
 
-    private fun getSuggestions(text: String) {
-        if (isLoading) return
-        
+        // Show loading state (could update chip text)
+        Toast.makeText(this, "AI is working...", Toast.LENGTH_SHORT).show()
+
         serviceScope.launch(Dispatchers.IO) {
             try {
-                setLoading(true)
-                
                 val requestJson = JSONObject().apply {
-                    put("text", text)
-                    put("context", conversationHistory.takeLast(3).joinToString(" "))
-                    put("appContext", currentAppContext)
-                    put("count", 3)
+                    put("text", originalText)
+                    put("action", action)
+                    put("context", currentAppContext)
                 }
+                
+                // Endpoint: /keyboard/improve or /keyboard/tone
+                // Adjusting endpoint based on action for compatibility with likely backend structure
+                val endpoint = if (action == "improve") "correct" else "tone" 
 
                 val request = Request.Builder()
-                    .url("$BASE_URL/keyboard/suggest")
+                    .url("$BASE_URL/keyboard/$endpoint")
                     .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
                     .build()
 
                 val response = client.newCall(request).execute()
                 if (response.isSuccessful) {
                     val json = JSONObject(response.body?.string() ?: "")
-                    val suggestions = json.optJSONArray("suggestions")
+                    // Assuming backend returns 'corrected' or 'result'
+                    val newText = json.optString("corrected", json.optString("result", ""))
                     
-                    val suggestionsList = mutableListOf<String>()
-                    if (suggestions != null) {
-                        for (i in 0 until suggestions.length()) {
-                            suggestionsList.add(suggestions.getString(i))
+                    if (newText.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            replaceText(newText)
                         }
-                    }
-                    
-                    withContext(Dispatchers.Main) {
-                        displaySuggestions(suggestionsList)
                     }
                 }
             } catch (e: Exception) {
-                android.util.Log.e(TAG, "Suggestions error", e)
-            } finally {
-                setLoading(false)
-            }
-        }
-    }
-
-    private fun displaySuggestions(suggestions: List<String>) {
-        val container = (suggestionsBar.getChildAt(0) as LinearLayout)
-        container.removeAllViews()
-        currentSuggestions = suggestions
-        
-        suggestions.forEach { suggestion ->
-            val chip = TextView(this).apply {
-                text = suggestion
-                textSize = 12f
-                setTextColor(Color.WHITE)
-                setPadding(dpToPx(16), dpToPx(8), dpToPx(16), dpToPx(8))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    setMargins(dpToPx(3), 0, dpToPx(3), 0)
-                }
-                background = createSuggestionChipDrawable()
-                isClickable = true
-                
-                setOnClickListener {
-                    inputField.setText(suggestion)
-                    inputField.setSelection(suggestion.length)
-                    clearSuggestions()
+                android.util.Log.e(TAG, "AI Error", e)
+                withContext(Dispatchers.Main) {
+                     Toast.makeText(applicationContext, "AI Error: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
-            container.addView(chip)
         }
     }
 
-    private fun createSuggestionChipDrawable() = android.graphics.drawable.GradientDrawable().apply {
-        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-        cornerRadius = dpToPx(16).toFloat()
-        colors = intArrayOf(
-            Color.parseColor("#1A23A6E2"),
-            Color.parseColor("#1A0066FF")
-        )
-        setStroke(1, Color.parseColor("#23A6E2"))
-    }
-
-    private fun clearSuggestions() {
-        val container = (suggestionsBar.getChildAt(0) as LinearLayout)
-        container.removeAllViews()
-        currentSuggestions = emptyList()
-    }
-
-    private fun setLoading(loading: Boolean) {
-        isLoading = loading
-        serviceScope.launch(Dispatchers.Main) {
-            loadingIndicator.visibility = if (loading) View.VISIBLE else View.GONE
-        }
-    }
-
-    // Action handlers
     private fun handleComplete() {
-        val text = inputField.text.toString()
+        val text = getCurrentText()
         if (text.isEmpty()) return
         
-        Toast.makeText(this, "Completing text...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Completing...", Toast.LENGTH_SHORT).show()
         
         serviceScope.launch(Dispatchers.IO) {
             try {
                 val requestJson = JSONObject().apply {
                     put("text", text)
-                    put("context", conversationHistory.takeLast(3).joinToString(" "))
                 }
 
                 val request = Request.Builder()
@@ -572,9 +221,10 @@ class StreminiIME : InputMethodService() {
                     val json = JSONObject(response.body?.string() ?: "")
                     val completion = json.optString("completion", "")
                     
-                    withContext(Dispatchers.Main) {
-                        inputField.setText(completion)
-                        inputField.setSelection(completion.length)
+                    if (completion.isNotEmpty()) {
+                        withContext(Dispatchers.Main) {
+                            commitText(completion) // Append completion
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -583,87 +233,16 @@ class StreminiIME : InputMethodService() {
         }
     }
 
-    private fun handleCorrect() {
-        val text = inputField.text.toString()
-        if (text.isEmpty()) return
+    private fun replaceText(newText: String) {
+        val ic = currentInputConnection ?: return
         
-        Toast.makeText(this, "Correcting grammar...", Toast.LENGTH_SHORT).show()
+        // Delete everything
+        val before = ic.getTextBeforeCursor(1000, 0) ?: ""
+        val after = ic.getTextAfterCursor(1000, 0) ?: ""
+        ic.deleteSurroundingText(before.length, after.length)
         
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val requestJson = JSONObject().apply {
-                    put("text", text)
-                    put("language", "en")
-                }
-
-                val request = Request.Builder()
-                    .url("$BASE_URL/keyboard/correct")
-                    .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
-                    .build()
-
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string() ?: "")
-                    val corrected = json.optString("corrected", "")
-                    
-                    withContext(Dispatchers.Main) {
-                        inputField.setText(corrected)
-                        inputField.setSelection(corrected.length)
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e(TAG, "Correct error", e)
-            }
-        }
-    }
-
-    private fun handleTone() {
-        val text = inputField.text.toString()
-        if (text.isEmpty()) return
-        
-        Toast.makeText(this, "Change tone feature", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun handleTranslate() {
-        val text = inputField.text.toString()
-        if (text.isEmpty()) return
-        
-        Toast.makeText(this, "Translate feature", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun handleExpand() {
-        val text = inputField.text.toString()
-        if (text.isEmpty()) return
-        
-        Toast.makeText(this, "Expanding text...", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun handleEmoji() {
-        Toast.makeText(this, "Emoji suggestions", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun commitText(text: String) {
-        currentInputConnection?.commitText(text, 1)
-    }
-
-    private fun commitCurrentText() {
-        val text = inputField.text.toString()
-        if (text.isNotEmpty()) {
-            commitText(text)
-            inputField.setText("")
-            conversationHistory.add(text)
-            if (conversationHistory.size > 10) {
-                conversationHistory.removeAt(0)
-            }
-        }
-    }
-
-    private fun deleteText() {
-        currentInputConnection?.deleteSurroundingText(1, 0)
-        val text = inputField.text.toString()
-        if (text.isNotEmpty()) {
-            inputField.setText(text.substring(0, text.length - 1))
-        }
+        // Insert new text
+        ic.commitText(newText, 1)
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -675,9 +254,6 @@ class StreminiIME : InputMethodService() {
             "com.google.android.gm" -> "email"
             else -> "general"
         }
-        
-        inputField.setText("")
-        clearSuggestions()
     }
 
     override fun onDestroy() {
