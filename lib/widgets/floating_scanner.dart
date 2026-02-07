@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -42,10 +43,29 @@ class FloatingScannerState {
 
 class FloatingScannerNotifier extends Notifier<FloatingScannerState> {
   static const MethodChannel _channel = MethodChannel('stremini.chat.overlay');
+  static const EventChannel _eventChannel = EventChannel('stremini.chat.overlay/events');
+  StreamSubscription<dynamic>? _scanSubscription;
 
   @override
   FloatingScannerState build() {
+    _scanSubscription ??= _eventChannel.receiveBroadcastStream().listen(_handleScanEvent);
+    ref.onDispose(() {
+      _scanSubscription?.cancel();
+      _scanSubscription = null;
+    });
     return FloatingScannerState();
+  }
+
+  void _handleScanEvent(dynamic event) {
+    if (event is! Map) return;
+    final action = event['action'];
+    if (action == 'scan_complete') {
+      final text = event['text'] as String? ?? '';
+      processScanResult(text);
+    } else if (action == 'scan_error') {
+      final error = event['error'] as String? ?? 'Unknown scan error';
+      state = state.copyWith(isScanning: false, error: error);
+    }
   }
 
   void show() {
@@ -107,11 +127,16 @@ class FloatingScannerNotifier extends Notifier<FloatingScannerState> {
 }
 
 // Floating Scanner Widget
-class FloatingScanner extends ConsumerWidget {
+class FloatingScanner extends ConsumerStatefulWidget {
   const FloatingScanner({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FloatingScanner> createState() => _FloatingScannerState();
+}
+
+class _FloatingScannerState extends ConsumerState<FloatingScanner> {
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(floatingScannerProvider);
     final notifier = ref.read(floatingScannerProvider.notifier);
 
@@ -127,14 +152,14 @@ class FloatingScanner extends ConsumerWidget {
               children: [
                 // Header
                 _buildHeader(notifier),
-                
+
                 // Content
                 Expanded(
                   child: _buildContent(state, notifier, context),
                 ),
               ],
             ),
-            
+
             // Close button
             Positioned(
               top: 16,

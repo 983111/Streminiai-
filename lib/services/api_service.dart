@@ -99,7 +99,39 @@ class ApiService {
   }
 
   // Keep existing methods
-  Future<SecurityScanResult> scanContent(String content) async { return SecurityScanResult(isSafe: true, riskLevel: 'low', tags: [], analysis: ''); }
+  Future<SecurityScanResult> scanContent(String content) async {
+    final lower = content.toLowerCase();
+    final dangerKeywords = [
+      'pirate',
+      'piratebay',
+      'torrent',
+      'crack',
+      'keygen',
+      'magnet',
+      'proxy',
+      'phishing',
+    ];
+    final matched = dangerKeywords.where(lower.contains).toList();
+    final bool isDanger = matched.isNotEmpty;
+
+    final tags = <String>[];
+    if (isDanger) {
+      tags.add('danger');
+    } else {
+      tags.add('safe');
+    }
+
+    final analysis = isDanger
+        ? 'Potentially risky keywords detected: ${matched.join(', ')}.'
+        : 'No suspicious keywords detected in the scanned text.';
+
+    return SecurityScanResult(
+      isSafe: !isDanger,
+      riskLevel: isDanger ? 'danger' : 'safe',
+      tags: tags,
+      analysis: analysis,
+    );
+  }
   Future<VoiceCommandResult> parseVoiceCommand(String command) async { return VoiceCommandResult(action: '', parameters: {}); }
   Future<String> translateScreen(String content, String targetLanguage) async { return ""; }
   Future<String> completeText(String incompleteText) async { return ""; }

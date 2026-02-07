@@ -1,5 +1,7 @@
 // Save this file as: lib/widgets/html_floating_complete.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:math' as math;
 import '../services/api_service.dart';
@@ -97,8 +99,17 @@ class HtmlFloatingState {
 // STATE NOTIFIER
 // ========================================
 class HtmlFloatingNotifier extends Notifier<HtmlFloatingState> {
+  static const MethodChannel _channel = MethodChannel('stremini.chat.overlay');
+  static const EventChannel _eventChannel = EventChannel('stremini.chat.overlay/events');
+  StreamSubscription<dynamic>? _scanSubscription;
+
   @override
   HtmlFloatingState build() {
+    _scanSubscription ??= _eventChannel.receiveBroadcastStream().listen(_handleScanEvent);
+    ref.onDispose(() {
+      _scanSubscription?.cancel();
+      _scanSubscription = null;
+    });
     return HtmlFloatingState();
   }
 
@@ -154,16 +165,7 @@ class HtmlFloatingNotifier extends Notifier<HtmlFloatingState> {
     );
 
     try {
-      // Simulate scanning duration
-      await Future.delayed(const Duration(seconds: 2));
-      
-      // Demo scan results - In production, this comes from ScreenScannerService
-      final demoTags = _generateDemoScanTags();
-      
-      state = state.copyWith(
-        scanning: false,
-        scanTags: demoTags,
-      );
+      await _channel.invokeMethod('startScreenScan');
     } catch (e) {
       state = state.copyWith(
         scanning: false,
@@ -173,37 +175,53 @@ class HtmlFloatingNotifier extends Notifier<HtmlFloatingState> {
     }
   }
 
-  List<ScanTag> _generateDemoScanTags() {
-    return [
-      ScanTag(
-        id: '1',
-        position: const Offset(100, 150),
-        tag: 'Scam',
-        color: const Color(0xFFD32F2F),
-        reason: 'Suspicious link detected - URL shortener used',
-      ),
-      ScanTag(
-        id: '2',
-        position: const Offset(50, 300),
-        tag: 'Urgent',
-        color: const Color(0xFFFF5722),
-        reason: 'Pressure tactic - "Act now" language detected',
-      ),
-      ScanTag(
-        id: '3',
-        position: const Offset(200, 450),
-        tag: 'Safe',
-        color: const Color(0xFF4CAF50),
-        reason: 'Verified source - Official domain',
-      ),
-      ScanTag(
-        id: '4',
-        position: const Offset(150, 600),
-        tag: 'Emotional',
-        color: const Color(0xFF9C27B0),
-        reason: 'Emotional manipulation detected',
-      ),
-    ];
+  void _handleScanEvent(dynamic event) {
+    if (event is! Map) return;
+    final action = event['action'];
+    if (action == 'scan_complete') {
+      final text = event['text'] as String? ?? '';
+      _processScanResult(text);
+    } else if (action == 'scan_error') {
+      final error = event['error'] as String? ?? 'Unknown scan error';
+      state = state.copyWith(
+        scanning: false,
+        scanError: error,
+        scannerActive: false,
+      );
+    }
+  }
+
+  Future<void> _processScanResult(String text) async {
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final result = await apiService.scanContent(text);
+
+      final List<ScanTag> tags = [];
+      for (var i = 0; i < result.tags.length; i++) {
+        final tag = result.tags[i];
+        tags.add(
+          ScanTag(
+            id: 'scan_$i',
+            position: Offset(24, 140 + (i * 64)),
+            tag: tag,
+            color: tag == 'danger' ? const Color(0xFFD32F2F) : const Color(0xFF4CAF50),
+            reason: result.analysis,
+          ),
+        );
+      }
+
+      state = state.copyWith(
+        scanning: false,
+        scanTags: tags,
+        scanError: null,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        scanning: false,
+        scanError: 'Analysis failed: $e',
+        scannerActive: false,
+      );
+    }
   }
 
   void updateBubblePosition(Offset newPosition) {

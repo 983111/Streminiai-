@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:math' as math;
 import '../services/api_service.dart';
@@ -96,8 +98,17 @@ class HtmlFloatingState {
 // STATE NOTIFIER
 // ========================================
 class HtmlFloatingNotifier extends Notifier<HtmlFloatingState> {
+  static const MethodChannel _channel = MethodChannel('stremini.chat.overlay');
+  static const EventChannel _eventChannel = EventChannel('stremini.chat.overlay/events');
+  StreamSubscription<dynamic>? _scanSubscription;
+
   @override
   HtmlFloatingState build() {
+    _scanSubscription ??= _eventChannel.receiveBroadcastStream().listen(_handleScanEvent);
+    ref.onDispose(() {
+      _scanSubscription?.cancel();
+      _scanSubscription = null;
+    });
     return HtmlFloatingState();
   }
 
@@ -147,52 +158,67 @@ class HtmlFloatingNotifier extends Notifier<HtmlFloatingState> {
       scannerActive: true,
       scanError: null,
       radialMenuOpen: false,
+      scanTags: [],
     );
 
     try {
-      // Simulate screen reading (in real implementation, this would use accessibility service)
-      await Future.delayed(const Duration(seconds: 2));
-      
-      // Demo data - In real implementation, this comes from ScreenScannerService
-      final demoScanResult = _generateDemoScanTags();
-      
-      state = state.copyWith(
-        scanning: false,
-        scanTags: demoScanResult,
-      );
+      await _channel.invokeMethod('startScreenScan');
     } catch (e) {
       state = state.copyWith(
         scanning: false,
         scanError: 'Scan failed: $e',
+        scannerActive: false,
       );
     }
   }
 
-  List<ScanTag> _generateDemoScanTags() {
-    // Demo tags at different positions
-    return [
-      ScanTag(
-        id: '1',
-        position: const Offset(100, 150),
-        tag: 'Scam',
-        color: const Color(0xFFD32F2F),
-        reason: 'Suspicious link detected',
-      ),
-      ScanTag(
-        id: '2',
-        position: const Offset(50, 300),
-        tag: 'Urgent',
-        color: const Color(0xFFFF5722),
-        reason: 'Pressure tactic used',
-      ),
-      ScanTag(
-        id: '3',
-        position: const Offset(200, 450),
-        tag: 'Safe',
-        color: const Color(0xFF4CAF50),
-        reason: 'Verified source',
-      ),
-    ];
+  void _handleScanEvent(dynamic event) {
+    if (event is! Map) return;
+    final action = event['action'];
+    if (action == 'scan_complete') {
+      final text = event['text'] as String? ?? '';
+      _processScanResult(text);
+    } else if (action == 'scan_error') {
+      final error = event['error'] as String? ?? 'Unknown scan error';
+      state = state.copyWith(
+        scanning: false,
+        scanError: error,
+        scannerActive: false,
+      );
+    }
+  }
+
+  Future<void> _processScanResult(String text) async {
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final result = await apiService.scanContent(text);
+
+      final List<ScanTag> tags = [];
+      for (var i = 0; i < result.tags.length; i++) {
+        final tag = result.tags[i];
+        tags.add(
+          ScanTag(
+            id: 'scan_$i',
+            position: Offset(24, 140 + (i * 64)),
+            tag: tag,
+            color: tag == 'danger' ? const Color(0xFFD32F2F) : const Color(0xFF4CAF50),
+            reason: result.analysis,
+          ),
+        );
+      }
+
+      state = state.copyWith(
+        scanning: false,
+        scanTags: tags,
+        scanError: null,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        scanning: false,
+        scanError: 'Analysis failed: $e',
+        scannerActive: false,
+      );
+    }
   }
 
   void updateBubblePosition(Offset newPosition) {
