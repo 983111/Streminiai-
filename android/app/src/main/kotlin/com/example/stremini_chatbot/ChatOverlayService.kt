@@ -1,6 +1,8 @@
 package com.example.stremini_chatbot
 
 import android.animation.ValueAnimator
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -79,12 +81,19 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var isDragging = false
     private var hasMoved = false
 
-    private val bubbleSizeDp = 70f
-    private val menuItemSizeDp = 56f
+    private val bubbleSizeDp = 60f  // Matches layout bubble size
+    private val menuItemSizeDp = 50f  // Matches layout menu item size
     private val radiusDp = 80f
 
-    private var lastCollapsedX = 0
-    private var lastCollapsedY = 200
+    // Store bubble's screen position (center of bubble on screen, not window position)
+    private var bubbleScreenX = 0
+    private var bubbleScreenY = 0
+
+    // Animation guards to prevent overlapping/resizing flicker
+    private var isMenuAnimating = false
+    private var windowAnimator: ValueAnimator? = null
+    private var isWindowResizing = false
+    private var preventPositionUpdates = false  // NEW: Prevents position updates during resize
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -159,38 +168,38 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // CRITICAL FIX: Always use the FULL expanded container size
-        // This prevents any size changes that cause position jumps
         val radiusPx = dpToPx(radiusDp).toFloat()
         val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
         val expandedWindowSizePx = ((radiusPx * 2) + bubbleSizePx + dpToPx(20f)).toInt()
+        val collapsedWindowSizePx = (bubbleSizePx + dpToPx(10f)).toInt()
 
         params = WindowManager.LayoutParams(
-            expandedWindowSizePx,  // Always use expanded size
-            expandedWindowSizePx,  // Always use expanded size
+            collapsedWindowSizePx,
+            collapsedWindowSizePx,
             typeParam,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or  // CRITICAL: Allow touches to pass through
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or  // Watch for outside touches
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                     WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         )
         params.gravity = Gravity.TOP or Gravity.START
         
-        // Position the container so bubble appears at lastCollapsed position
-        val offsetPx = ((expandedWindowSizePx / 2) - (dpToPx(bubbleSizeDp) / 2))
-        params.x = lastCollapsedX - offsetPx
-        params.y = lastCollapsedY - offsetPx
+        // Initialize bubble screen position (bubble center on screen)
+        val screenHeight = resources.displayMetrics.heightPixels
+        bubbleScreenX = 60
+        bubbleScreenY = (screenHeight * 0.25).toInt()
+        
+        // Calculate window position from bubble position
+        val windowHalfSize = collapsedWindowSizePx / 2
+        params.x = bubbleScreenX - windowHalfSize
+        params.y = bubbleScreenY - windowHalfSize
 
         bubbleIcon.setOnTouchListener(this)
         
-        // Set circular border for main bubble icon
-        val bubbleBackground = android.graphics.drawable.GradientDrawable()
-        bubbleBackground.shape = android.graphics.drawable.GradientDrawable.OVAL
-        bubbleBackground.setColor(android.graphics.Color.BLACK)  // Black background
-        bubbleBackground.setStroke(dpToPx(3f), android.graphics.Color.parseColor("#23A6E2"))  // Neon blue borderwidth
-        bubbleIcon.background = bubbleBackground
+        // Note: Bubble background is set in XML using glow_gradient_ring drawable
+        // No need to override it programmatically
 
         menuItems[0].setOnClickListener {
             collapseMenu()
@@ -214,69 +223,41 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
 
         bubbleIcon.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        bubbleIcon.isClickable = true
+        bubbleIcon.isFocusable = true
+        
         menuItems.forEach { 
             it.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            it.isClickable = true
+            it.isFocusable = true
             
-            // Menu items have a circular BLACK background with no border
-            val drawable = android.graphics.drawable.GradientDrawable()
-            drawable.shape = android.graphics.drawable.GradientDrawable.OVAL
-            drawable.setColor(android.graphics.Color.BLACK)  // Black background only
-            it.background = drawable
+            // Start as INVISIBLE (not GONE to avoid layout shifts)
+            it.visibility = View.INVISIBLE
         }
 
         updateMenuItemsColor()
         
-        // Make the overlay root view transparent to touches except on bubble and menu items
-        overlayView.setOnTouchListener { view, event ->
-            // Get touch coordinates relative to the overlay view
-            val x = event.x
-            val y = event.y
-            
-            // Check if touch is on bubble icon using local coordinates
-            val bubbleLeft = bubbleIcon.left.toFloat()
-            val bubbleTop = bubbleIcon.top.toFloat()
-            val bubbleRight = bubbleLeft + bubbleIcon.width
-            val bubbleBottom = bubbleTop + bubbleIcon.height
-            
-            if (x >= bubbleLeft && x <= bubbleRight && y >= bubbleTop && y <= bubbleBottom) {
-                // Forward touch to bubble icon
-                val bubbleX = x - bubbleLeft
-                val bubbleY = y - bubbleTop
-                val bubbleEvent = MotionEvent.obtain(event)
-                bubbleEvent.setLocation(bubbleX, bubbleY)
-                val handled = bubbleIcon.onTouchEvent(bubbleEvent)
-                bubbleEvent.recycle()
-                return@setOnTouchListener handled
-            }
-            
-            // Check if touch is on any visible menu item
-            if (isMenuExpanded) {
-                for (menuItem in menuItems) {
-                    if (menuItem.visibility == View.VISIBLE && menuItem.alpha > 0.5f) {
-                        val itemLeft = menuItem.left.toFloat() + menuItem.translationX
-                        val itemTop = menuItem.top.toFloat() + menuItem.translationY
-                        val itemRight = itemLeft + menuItem.width
-                        val itemBottom = itemTop + menuItem.height
-                        
-                        if (x >= itemLeft && x <= itemRight && y >= itemTop && y <= itemBottom) {
-                            // Forward touch to menu item
-                            val itemX = x - itemLeft
-                            val itemY = y - itemTop
-                            val itemEvent = MotionEvent.obtain(event)
-                            itemEvent.setLocation(itemX, itemY)
-                            val handled = menuItem.onTouchEvent(itemEvent)
-                            itemEvent.recycle()
-                            return@setOnTouchListener handled
-                        }
-                    }
-                }
-            }
-            
-            // Touch is outside bubble/menu - DON'T consume, pass through to app below
-            false
-        }
+        // Make root overlay completely transparent and non-clickable
+        // Only the bubble and menu items should receive touches
+        overlayView.background = null
+        overlayView.isClickable = false
+        overlayView.isFocusable = false
+        overlayView.setOnTouchListener { _, _ -> false }
         
         windowManager.addView(overlayView, params)
+
+        (overlayView as? android.view.ViewGroup)?.apply {
+            clipToPadding = false
+            clipChildren = false
+            // Don't intercept touch events - let them pass through
+            isMotionEventSplittingEnabled = false
+        }
+
+        overlayView.layoutParams = overlayView.layoutParams?.apply {
+            width = params.width
+            height = params.height
+        }
+        overlayView.requestLayout()
     }
 
     private fun handleAIChat() {
@@ -447,13 +428,11 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         updateMenuItemsColor()
         
         if (isScannerActive) {
-            // Start the ScreenReaderService for screen detection
             val intent = Intent(this, ScreenReaderService::class.java)
             intent.action = ScreenReaderService.ACTION_START_SCAN
             startService(intent)
             Toast.makeText(this, "Screen Detection Enabled", Toast.LENGTH_SHORT).show()
         } else {
-            // Stop the ScreenReaderService
             val intent = Intent(this, ScreenReaderService::class.java)
             intent.action = ScreenReaderService.ACTION_STOP_SCAN
             startService(intent)
@@ -477,14 +456,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         toggleFeature(menuItems[4].id)
         
         if (isFeatureActive(menuItems[4].id)) {
-            // Open the Keyboard/Input Method Settings
             try {
                 val intent = Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS)
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
                 Toast.makeText(this, "Open Settings to enable AI Keyboard", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                // Fallback: Show input method picker
                 try {
                     inputMethodManager.showInputMethodPicker()
                     Toast.makeText(this, "Select AI Keyboard from the list", Toast.LENGTH_SHORT).show()
@@ -503,10 +480,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
     private fun handleRefresh() {
-        // Clear all active features
         activeFeatures.clear()
         
-        // Stop scanner if it's running
         if (isScannerActive) {
             isScannerActive = false
             val intent = Intent(this, ScreenReaderService::class.java)
@@ -514,7 +489,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             startService(intent)
         }
         
-        // Hide chatbot if visible
         hideFloatingChatbot()
         
         updateMenuItemsColor()
@@ -538,27 +512,27 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         menuItems.forEach { item ->
             if (activeFeatures.contains(item.id) ||
                 (item.id == menuItems[3].id && isScannerActive)) {
-                // Active: Black background with neon blue glow overlay (no border)
+                // Active: Neon blue FILL (no border) with semi-transparency for glow effect
                 val layers = arrayOf(
                     // Layer 1: Black circle background
                     android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.OVAL
                         setColor(android.graphics.Color.BLACK)
                     },
-                    // Layer 2: Neon blue glow overlay
+                    // Layer 2: Neon blue fill overlay (no border)
                     android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(NEON_BLUE)
-                        alpha = 180  // Semi-transparent for glow effect (0-255)
+                        setColor(android.graphics.Color.parseColor("#23A6E2"))  // Neon blue FILL
+                        alpha = 200  // Semi-transparent for glow effect (0-255)
                     }
                 )
                 item.background = android.graphics.drawable.LayerDrawable(layers)
                 item.setColorFilter(WHITE)  // White icon
             } else {
-                // Inactive: Black background only (no border)
+                // Inactive: Black background with NO border
                 val drawable = android.graphics.drawable.GradientDrawable()
                 drawable.shape = android.graphics.drawable.GradientDrawable.OVAL
-                drawable.setColor(android.graphics.Color.BLACK)
+                drawable.setColor(android.graphics.Color.BLACK)  // Black background only
                 item.background = drawable
                 item.setColorFilter(WHITE)  // White icon
             }
@@ -568,46 +542,64 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     override fun onTouch(v: View, event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                initialX = params.x
-                initialY = params.y
                 initialTouchX = event.rawX
                 initialTouchY = event.rawY
+                initialX = bubbleScreenX
+                initialY = bubbleScreenY
                 isDragging = false
                 hasMoved = false
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
+                // FIXED: Prevent position updates during resize animation
+                if (isWindowResizing || preventPositionUpdates) return true
+
                 val dx = (event.rawX - initialTouchX).toInt()
                 val dy = (event.rawY - initialTouchY).toInt()
+                
                 if (abs(dx) > 10 || abs(dy) > 10) {
                     hasMoved = true
                     if (!isMenuExpanded) {
                         isDragging = true
-                        // Calculate where the bubble should be on screen
-                        val radiusPx = dpToPx(radiusDp).toFloat()
+
+                        bubbleScreenX = initialX + dx
+                        bubbleScreenY = initialY + dy
+
                         val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
-                        val expandedWindowSizePx = ((radiusPx * 2) + bubbleSizePx + dpToPx(20f))
-                        val offsetPx = (expandedWindowSizePx / 2) - (bubbleSizePx / 2)
+                        val collapsedWindowSizePx = bubbleSizePx + dpToPx(10f)
+                        val windowHalfSize = collapsedWindowSizePx / 2
+
+                        params.x = (bubbleScreenX - windowHalfSize).toInt()
+                        params.y = (bubbleScreenY - windowHalfSize).toInt()
                         
-                        // Move container so bubble follows touch
-                        params.x = initialX + dx
-                        params.y = initialY + dy
-                        windowManager.updateViewLayout(overlayView, params)
-                        
-                        // Update lastCollapsed to bubble's screen position
-                        lastCollapsedX = params.x + offsetPx.toInt()
-                        lastCollapsedY = params.y + offsetPx.toInt()
+                        try {
+                            windowManager.updateViewLayout(overlayView, params)
+                        } catch (e: Exception) {
+                            // Ignore
+                        }
                     } else {
-                        collapseMenu()
+                        if (!isMenuAnimating) collapseMenu()
                     }
                 }
                 return true
             }
             MotionEvent.ACTION_UP -> {
+                // FIXED: Ignore tap/release while resizing
+                if (isWindowResizing || preventPositionUpdates) {
+                    isDragging = false
+                    hasMoved = false
+                    return true
+                }
+
                 if (!hasMoved && !isDragging) {
-                    toggleMenu()
+                    if (!isMenuAnimating) toggleMenu()
                 } else if (isDragging) {
-                    snapToEdge()
+                    // FIXED: Wait for resize to complete before snapping
+                    if (isWindowResizing || preventPositionUpdates) {
+                        overlayView.postDelayed({ snapToEdge() }, 200)
+                    } else {
+                        snapToEdge()
+                    }
                 }
                 isDragging = false
                 hasMoved = false
@@ -618,65 +610,76 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
     private fun toggleMenu() {
+        if (isMenuAnimating) return
         if (isMenuExpanded) collapseMenu() else expandMenu()
     }
 
     private fun expandMenu() {
+        if (isMenuAnimating || isMenuExpanded) return
         isMenuExpanded = true
+        isMenuAnimating = true
 
         val radiusPx = dpToPx(radiusDp).toFloat()
         val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
         val menuItemSizePx = dpToPx(menuItemSizeDp).toFloat()
 
         val expandedWindowSizePx = (radiusPx * 2) + bubbleSizePx + dpToPx(20f)
+        val collapsedWindowSizePx = bubbleSizePx + dpToPx(10f)
+
+        // FIXED: Animate window resizing with proper lock
+        animateWindowSize(collapsedWindowSizePx.toFloat(), expandedWindowSizePx, 220L) {
+            isMenuAnimating = false
+        }
+
         val centerX = expandedWindowSizePx / 2f
         val centerY = expandedWindowSizePx / 2f
 
-        // Detect which side of screen the bubble is on
         val screenWidth = resources.displayMetrics.widthPixels
-        val offsetPx = (expandedWindowSizePx / 2) - (bubbleSizePx / 2)
-        val bubbleScreenX = params.x + offsetPx.toInt()
-        val bubbleCenterX = bubbleScreenX + (bubbleSizePx / 2)
-        val isOnRightSide = bubbleCenterX > (screenWidth / 2)
+        val isOnRightSide = bubbleScreenX > (screenWidth / 2)
 
-        // CONSISTENT ICON ORDER: Icons stay in same position visually
-        // Right side: opens left
-        // Left side: opens right (mirrored angles)
         val fixedAngles = if (isOnRightSide) {
-            // Right side - opens left (top to bottom)
             listOf(90.0, 135.0, 180.0, 225.0, 270.0)
         } else {
-            // Left side - opens right (top to bottom, same visual order)
             listOf(90.0, 45.0, 0.0, -45.0, -90.0)
         }
 
-        for ((index, view) in menuItems.withIndex()) {
-            view.visibility = View.VISIBLE
-            view.alpha = 0f
+        overlayView.postDelayed({
+            for ((index, view) in menuItems.withIndex()) {
+                view.visibility = View.VISIBLE
+                view.alpha = 0f
+                view.translationX = 0f
+                view.translationY = 0f
 
-            val angle = fixedAngles[index]
-            val rad = Math.toRadians(angle)
+                val angle = fixedAngles[index]
+                val rad = Math.toRadians(angle)
 
-            val targetX = centerX + (radiusPx * cos(rad)).toFloat() - (menuItemSizePx / 2)
-            val targetY = centerY + (radiusPx * -sin(rad)).toFloat() - (menuItemSizePx / 2)
+                val targetX = centerX + (radiusPx * cos(rad)).toFloat() - (menuItemSizePx / 2)
+                val targetY = centerY + (radiusPx * -sin(rad)).toFloat() - (menuItemSizePx / 2)
 
-            val initialCenteredX = centerX - (menuItemSizePx / 2)
-            val initialCenteredY = centerY - (menuItemSizePx / 2)
+                val initialCenteredX = centerX - (menuItemSizePx / 2)
+                val initialCenteredY = centerY - (menuItemSizePx / 2)
 
-            view.animate()
-                .translationX(targetX - initialCenteredX)
-                .translationY(targetY - initialCenteredY)
-                .alpha(1f)
-                .setDuration(200)
-                .setInterpolator(DecelerateInterpolator())
-                .start()
-        }
-
-        updateMenuItemsColor()
+                view.animate()
+                    .translationX(targetX - initialCenteredX)
+                    .translationY(targetY - initialCenteredY)
+                    .alpha(1f)
+                    .setDuration(220)
+                    .setInterpolator(DecelerateInterpolator())
+                    .start()
+            }
+            updateMenuItemsColor()
+        }, 160)
     }
 
     private fun collapseMenu() {
+        if (isMenuAnimating || !isMenuExpanded) return
         isMenuExpanded = false
+        isMenuAnimating = true
+
+        val radiusPx = dpToPx(radiusDp).toFloat()
+        val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
+        val expandedWindowSizePx = (radiusPx * 2) + bubbleSizePx + dpToPx(20f)
+        val collapsedWindowSizePx = bubbleSizePx + dpToPx(10f)
 
         for (view in menuItems) {
             view.animate()
@@ -685,42 +688,106 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 .alpha(0f)
                 .setDuration(150)
                 .setInterpolator(AccelerateInterpolator())
-                .withEndAction { view.visibility = View.GONE }
+                .withEndAction { view.visibility = View.INVISIBLE }
                 .start()
+        }
+
+        // FIXED: Improved timing for smoother collapse
+        overlayView.postDelayed({
+            animateWindowSize(expandedWindowSizePx, collapsedWindowSizePx.toFloat(), 200L) {
+                isMenuAnimating = false
+            }
+        }, 120)
+    }
+
+    private fun animateWindowSize(fromSize: Float, toSize: Float, duration: Long = 200L, onEnd: (() -> Unit)? = null) {
+        windowAnimator?.cancel()
+        isWindowResizing = true
+        preventPositionUpdates = true  // FIXED: Lock position updates during resize
+
+        val fromHalf = fromSize / 2f
+        val toHalf = toSize / 2f
+        val startX = bubbleScreenX - fromHalf
+        val endX = bubbleScreenX - toHalf
+        val startY = bubbleScreenY - fromHalf
+        val endY = bubbleScreenY - toHalf
+
+        windowAnimator = ValueAnimator.ofFloat(fromSize, toSize).apply {
+            this.duration = duration
+            interpolator = DecelerateInterpolator()
+            
+            addUpdateListener { animator ->
+                val newSize = animator.animatedValue as Float
+                val frac = if (toSize != fromSize) (newSize - fromSize) / (toSize - fromSize) else 1f
+                
+                params.width = newSize.toInt()
+                params.height = newSize.toInt()
+                params.x = (startX + (endX - startX) * frac).toInt()
+                params.y = (startY + (endY - startY) * frac).toInt()
+
+                try {
+                    windowManager.updateViewLayout(overlayView, params)
+                } catch (e: Exception) {
+                    // Ignore if view detached
+                }
+            }
+            
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    windowAnimator = null
+                    isWindowResizing = false
+                    preventPositionUpdates = false  // FIXED: Unlock position updates
+
+                    // Ensure final position is set
+                    params.width = toSize.toInt()
+                    params.height = toSize.toInt()
+                    params.x = (bubbleScreenX - toHalf).toInt()
+                    params.y = (bubbleScreenY - toHalf).toInt()
+                    
+                    try {
+                        windowManager.updateViewLayout(overlayView, params)
+                    } catch (e: Exception) {
+                        // Ignore
+                    }
+
+                    onEnd?.invoke()
+                }
+            })
+            start()
         }
     }
 
     private fun snapToEdge() {
-        val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
-        val radiusPx = dpToPx(radiusDp).toFloat()
-        val expandedWindowSizePx = (radiusPx * 2) + bubbleSizePx + dpToPx(20f)
-        val offsetPx = (expandedWindowSizePx / 2) - (bubbleSizePx / 2)
-        
-        val screenWidth = resources.displayMetrics.widthPixels
-
-        // Calculate bubble's current screen position
-        val currentBubbleScreenX = params.x + offsetPx.toInt()
-        val currentBubbleCenterX = currentBubbleScreenX + (bubbleSizePx / 2)
-        val middle = screenWidth / 2
-
-        // Calculate target bubble screen position
-        val targetBubbleScreenX = if (currentBubbleCenterX > middle) {
-            screenWidth - bubbleSizePx.toInt()
-        } else {
-            0
+        // FIXED: Wait for all animations to complete
+        if (isWindowResizing || preventPositionUpdates || isMenuAnimating) {
+            overlayView.postDelayed({ snapToEdge() }, 150)
+            return
         }
 
-        // Calculate target container position
-        val targetContainerX = targetBubbleScreenX - offsetPx.toInt()
+        val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
+        val screenWidth = resources.displayMetrics.widthPixels
+        val collapsedWindowSizePx = bubbleSizePx + dpToPx(10f)
+        val windowHalfSize = collapsedWindowSizePx / 2
 
-        ValueAnimator.ofInt(params.x, targetContainerX).apply {
-            duration = 150
+        val targetBubbleScreenX = if (bubbleScreenX > (screenWidth / 2)) {
+            screenWidth - (bubbleSizePx / 2).toInt()
+        } else {
+            (bubbleSizePx / 2).toInt()
+        }
+
+        ValueAnimator.ofInt(bubbleScreenX, targetBubbleScreenX).apply {
+            duration = 200  // FIXED: Slightly longer for smoother snap
             interpolator = DecelerateInterpolator()
+            
             addUpdateListener { animator ->
-                params.x = animator.animatedValue as Int
-                // Update lastCollapsed to bubble's screen position
-                lastCollapsedX = params.x + offsetPx.toInt()
-                windowManager.updateViewLayout(overlayView, params)
+                bubbleScreenX = animator.animatedValue as Int
+                params.x = (bubbleScreenX - windowHalfSize).toInt()
+                
+                try {
+                    windowManager.updateViewLayout(overlayView, params)
+                } catch (e: Exception) {
+                    // Ignore
+                }
             }
             start()
         }

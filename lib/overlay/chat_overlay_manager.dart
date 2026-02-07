@@ -57,11 +57,11 @@ class _ChatOverlayManagerState extends ConsumerState<ChatOverlayManager> {
         widget.child,
 
         // 2. The Floating Chat Icon Layer
-        // IgnorePointer wrapping with ignoring: true means touches pass through
-        // by default, but the DraggableChatIcon will handle its own gestures
+        // IgnorePointer wrapping with ignoring: false means the DraggableChatIcon
+        // can handle its own gestures, while touches outside pass through to the app
         if (!isMaximized)
           IgnorePointer(
-            ignoring: true,
+            ignoring: false,
             child: DraggableChatIcon(
               position: _bubblePosition,
               onDragEnd: updatePosition,
