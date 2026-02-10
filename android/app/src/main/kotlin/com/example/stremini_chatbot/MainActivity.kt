@@ -20,12 +20,8 @@ class MainActivity : FlutterActivity() {
     
     private var eventSink: EventChannel.EventSink? = null
 
-    // REMOVED: private val eventReceiver = object : BroadcastReceiver() { ... }
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        
-        // REMOVED: Scanner method channel ("com.example.stremini_chatbot")
         
         // Overlay channel for bubble controls
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
@@ -37,9 +33,13 @@ class MainActivity : FlutterActivity() {
                     requestOverlayPermissionSafe()
                     result.success(true)
                 }
-                // REMOVED: "hasAccessibilityPermission"
-                // REMOVED: "requestAccessibilityPermission"
-                // REMOVED: "startScreenScan"
+                "hasAccessibilityPermission" -> {
+                    result.success(isAccessibilityServiceEnabled())
+                }
+                "requestAccessibilityPermission" -> {
+                    requestAccessibilityPermissionSafe()
+                    result.success(true)
+                }
                 "startOverlayService" -> {
                     startOverlayServiceSafe()
                     result.success(true)
@@ -121,8 +121,44 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // REMOVED: private fun isAccessibilityServiceEnabled(): Boolean { ... }
-    // REMOVED: private fun requestAccessibilityPermissionSafe() { ... }
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        return try {
+            val accessibilityEnabled = Settings.Secure.getInt(
+                contentResolver,
+                Settings.Secure.ACCESSIBILITY_ENABLED,
+                0
+            )
+            if (accessibilityEnabled == 1) {
+                val services = Settings.Secure.getString(
+                    contentResolver,
+                    Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                )
+                val packageName = packageName
+                services?.contains(packageName) == true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error checking accessibility", e)
+            false
+        }
+    }
+
+    private fun requestAccessibilityPermissionSafe() {
+        try {
+            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            Toast.makeText(
+                this,
+                "Please enable 'Stremini Screen Scanner' in Accessibility Settings",
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Accessibility setting error", e)
+            Toast.makeText(this, "Error opening settings: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     private fun startOverlayServiceSafe() {
         try {
@@ -142,8 +178,6 @@ class MainActivity : FlutterActivity() {
             Toast.makeText(this, "Error starting service: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
-
-    // REMOVED: private fun startScreenScan() { ... }
 
     // Keyboard-related methods
     private fun isKeyboardEnabled(): Boolean {
@@ -200,15 +234,5 @@ class MainActivity : FlutterActivity() {
             Log.e("MainActivity", "Error showing keyboard picker", e)
             Toast.makeText(this, "Error showing picker: ${e.message}", Toast.LENGTH_SHORT).show()
         }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        // REMOVED: Receiver registration logic
-    }
-
-    override fun onPause() {
-        super.onPause()
-        // REMOVED: Receiver unregistration logic
     }
 }
