@@ -72,6 +72,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var isScannerActive = false
     private lateinit var inputMethodManager: InputMethodManager
     
+    // Kept from original file
     private lateinit var scannerChannel: android.view.inputmethod.InputMethodManager
 
     private var initialX = 0
@@ -81,19 +82,17 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var isDragging = false
     private var hasMoved = false
 
-    private val bubbleSizeDp = 60f  // Matches layout bubble size
-    private val menuItemSizeDp = 50f  // Matches layout menu item size
+    private val bubbleSizeDp = 60f
+    private val menuItemSizeDp = 50f
     private val radiusDp = 80f
 
-    // Store bubble's screen position (center of bubble on screen, not window position)
     private var bubbleScreenX = 0
     private var bubbleScreenY = 0
 
-    // Animation guards to prevent overlapping/resizing flicker
     private var isMenuAnimating = false
     private var windowAnimator: ValueAnimator? = null
     private var isWindowResizing = false
-    private var preventPositionUpdates = false  // NEW: Prevents position updates during resize
+    private var preventPositionUpdates = false
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -108,6 +107,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 ACTION_SEND_MESSAGE -> {
                     val message = intent.getStringExtra(EXTRA_MESSAGE)
                     if (message != null) {
+                        // If chat isn't visible, show it so user sees the alert
+                        if (!isChatbotVisible) showFloatingChatbot()
                         addMessageToChatbot(message, isUser = false)
                     }
                 }
@@ -170,7 +171,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
         val radiusPx = dpToPx(radiusDp).toFloat()
         val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
-        val expandedWindowSizePx = ((radiusPx * 2) + bubbleSizePx + dpToPx(20f)).toInt()
         val collapsedWindowSizePx = (bubbleSizePx + dpToPx(10f)).toInt()
 
         params = WindowManager.LayoutParams(
@@ -186,20 +186,15 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         )
         params.gravity = Gravity.TOP or Gravity.START
         
-        // Initialize bubble screen position (bubble center on screen)
         val screenHeight = resources.displayMetrics.heightPixels
         bubbleScreenX = 60
         bubbleScreenY = (screenHeight * 0.25).toInt()
         
-        // Calculate window position from bubble position
         val windowHalfSize = collapsedWindowSizePx / 2
         params.x = bubbleScreenX - windowHalfSize
         params.y = bubbleScreenY - windowHalfSize
 
         bubbleIcon.setOnTouchListener(this)
-        
-        // Note: Bubble background is set in XML using glow_gradient_ring drawable
-        // No need to override it programmatically
 
         menuItems[0].setOnClickListener {
             collapseMenu()
@@ -230,15 +225,11 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             it.setLayerType(View.LAYER_TYPE_HARDWARE, null)
             it.isClickable = true
             it.isFocusable = true
-            
-            // Start as INVISIBLE (not GONE to avoid layout shifts)
             it.visibility = View.INVISIBLE
         }
 
         updateMenuItemsColor()
         
-        // Make root overlay completely transparent and non-clickable
-        // Only the bubble and menu items should receive touches
         overlayView.background = null
         overlayView.isClickable = false
         overlayView.isFocusable = false
@@ -249,7 +240,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         (overlayView as? android.view.ViewGroup)?.apply {
             clipToPadding = false
             clipChildren = false
-            // Don't intercept touch events - let them pass through
             isMotionEventSplittingEnabled = false
         }
 
@@ -427,13 +417,13 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         isScannerActive = !isScannerActive
         updateMenuItemsColor()
         
+        // Start or Stop the ScreenReaderService
+        val intent = Intent(this, ScreenReaderService::class.java)
         if (isScannerActive) {
-            val intent = Intent(this, ScreenReaderService::class.java)
             intent.action = ScreenReaderService.ACTION_START_SCAN
             startService(intent)
             Toast.makeText(this, "Screen Detection Enabled", Toast.LENGTH_SHORT).show()
         } else {
-            val intent = Intent(this, ScreenReaderService::class.java)
             intent.action = ScreenReaderService.ACTION_STOP_SCAN
             startService(intent)
             Toast.makeText(this, "Screen Detection Disabled", Toast.LENGTH_SHORT).show()
@@ -512,29 +502,25 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         menuItems.forEach { item ->
             if (activeFeatures.contains(item.id) ||
                 (item.id == menuItems[3].id && isScannerActive)) {
-                // Active: Neon blue FILL (no border) with semi-transparency for glow effect
                 val layers = arrayOf(
-                    // Layer 1: Black circle background
                     android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.OVAL
                         setColor(android.graphics.Color.BLACK)
                     },
-                    // Layer 2: Neon blue fill overlay (no border)
                     android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(android.graphics.Color.parseColor("#23A6E2"))  // Neon blue FILL
-                        alpha = 200  // Semi-transparent for glow effect (0-255)
+                        setColor(android.graphics.Color.parseColor("#23A6E2"))
+                        alpha = 200
                     }
                 )
                 item.background = android.graphics.drawable.LayerDrawable(layers)
-                item.setColorFilter(WHITE)  // White icon
+                item.setColorFilter(WHITE)
             } else {
-                // Inactive: Black background with NO border
                 val drawable = android.graphics.drawable.GradientDrawable()
                 drawable.shape = android.graphics.drawable.GradientDrawable.OVAL
-                drawable.setColor(android.graphics.Color.BLACK)  // Black background only
+                drawable.setColor(android.graphics.Color.BLACK)
                 item.background = drawable
-                item.setColorFilter(WHITE)  // White icon
+                item.setColorFilter(WHITE)
             }
         }
     }
@@ -551,7 +537,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                // FIXED: Prevent position updates during resize animation
                 if (isWindowResizing || preventPositionUpdates) return true
 
                 val dx = (event.rawX - initialTouchX).toInt()
@@ -575,7 +560,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                         try {
                             windowManager.updateViewLayout(overlayView, params)
                         } catch (e: Exception) {
-                            // Ignore
                         }
                     } else {
                         if (!isMenuAnimating) collapseMenu()
@@ -584,7 +568,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                // FIXED: Ignore tap/release while resizing
                 if (isWindowResizing || preventPositionUpdates) {
                     isDragging = false
                     hasMoved = false
@@ -594,7 +577,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 if (!hasMoved && !isDragging) {
                     if (!isMenuAnimating) toggleMenu()
                 } else if (isDragging) {
-                    // FIXED: Wait for resize to complete before snapping
                     if (isWindowResizing || preventPositionUpdates) {
                         overlayView.postDelayed({ snapToEdge() }, 200)
                     } else {
@@ -626,7 +608,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         val expandedWindowSizePx = (radiusPx * 2) + bubbleSizePx + dpToPx(20f)
         val collapsedWindowSizePx = bubbleSizePx + dpToPx(10f)
 
-        // FIXED: Animate window resizing with proper lock
         animateWindowSize(collapsedWindowSizePx.toFloat(), expandedWindowSizePx, 220L) {
             isMenuAnimating = false
         }
@@ -692,7 +673,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 .start()
         }
 
-        // FIXED: Improved timing for smoother collapse
         overlayView.postDelayed({
             animateWindowSize(expandedWindowSizePx, collapsedWindowSizePx.toFloat(), 200L) {
                 isMenuAnimating = false
@@ -703,7 +683,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun animateWindowSize(fromSize: Float, toSize: Float, duration: Long = 200L, onEnd: (() -> Unit)? = null) {
         windowAnimator?.cancel()
         isWindowResizing = true
-        preventPositionUpdates = true  // FIXED: Lock position updates during resize
+        preventPositionUpdates = true
 
         val fromHalf = fromSize / 2f
         val toHalf = toSize / 2f
@@ -728,7 +708,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 try {
                     windowManager.updateViewLayout(overlayView, params)
                 } catch (e: Exception) {
-                    // Ignore if view detached
                 }
             }
             
@@ -736,9 +715,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 override fun onAnimationEnd(animation: Animator) {
                     windowAnimator = null
                     isWindowResizing = false
-                    preventPositionUpdates = false  // FIXED: Unlock position updates
+                    preventPositionUpdates = false
 
-                    // Ensure final position is set
                     params.width = toSize.toInt()
                     params.height = toSize.toInt()
                     params.x = (bubbleScreenX - toHalf).toInt()
@@ -747,7 +725,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     try {
                         windowManager.updateViewLayout(overlayView, params)
                     } catch (e: Exception) {
-                        // Ignore
                     }
 
                     onEnd?.invoke()
@@ -758,7 +735,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
     private fun snapToEdge() {
-        // FIXED: Wait for all animations to complete
         if (isWindowResizing || preventPositionUpdates || isMenuAnimating) {
             overlayView.postDelayed({ snapToEdge() }, 150)
             return
@@ -776,7 +752,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
 
         ValueAnimator.ofInt(bubbleScreenX, targetBubbleScreenX).apply {
-            duration = 200  // FIXED: Slightly longer for smoother snap
+            duration = 200
             interpolator = DecelerateInterpolator()
             
             addUpdateListener { animator ->
@@ -786,7 +762,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 try {
                     windowManager.updateViewLayout(overlayView, params)
                 } catch (e: Exception) {
-                    // Ignore
                 }
             }
             start()
