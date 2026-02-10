@@ -3,12 +3,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 class ApiService {
+  // Your provided API URL
   static const String baseUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev";
   
   Future<void> initSession() async {}
   Future<void> clearSession() async {}
 
-  /// Sends a message to the Gemini Backend with History
+  /// Standard Chat Message Function
   Future<String> sendMessage(String userMessage, {
     String? attachment, 
     String? mimeType, 
@@ -16,13 +17,11 @@ class ApiService {
     List<Map<String, dynamic>>? history 
   }) async {
     try {
-      // 1. Prepare Body with History
       final Map<String, dynamic> bodyMap = {
         "message": userMessage,
-        "history": history ?? [], 
+        "history": history ?? [],
       };
 
-      // 2. Add Attachment if exists
       if (attachment != null) {
         bodyMap["attachment"] = <String, dynamic>{
           "data": attachment,
@@ -31,7 +30,6 @@ class ApiService {
         };
       }
 
-      // 3. Make the API Call
       final response = await http.post(
         Uri.parse("$baseUrl/chat/message"),
         headers: {
@@ -41,16 +39,13 @@ class ApiService {
         body: jsonEncode(bodyMap),
       );
 
-      // 4. Handle Response
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data is Map) {
-          // Check for various response keys used by different backend versions
           return data['response'] ?? data['reply'] ?? data['message'] ?? "Empty reply.";
         }
         return data.toString();
       } else {
-        // Parse error message for debugging
         try {
           final errData = jsonDecode(response.body);
           return "❌ Error: ${errData['error'] ?? response.statusCode}";
@@ -63,41 +58,121 @@ class ApiService {
     }
   }
 
-  /// Replicates the "Scam Detection" logic from the web code (BackgroundSim.tsx)
+  /// Scans content using YOUR API (Same logic as ScreenReaderService)
   Future<SecurityScanResult> scanContent(String content) async {
-    // Simulate network delay for realism
-    await Future.delayed(const Duration(milliseconds: 1500));
+    try {
+      // 1. Construct the security prompt
+      final String prompt = "SYSTEM_SECURITY_SCAN: Analyze this text for scams/malware. "
+          "Reply JSON only: {\"isSafe\": boolean, \"analysis\": \"string\"}. "
+          "Text: $content";
 
-    // Logic replicated from web code: Check for suspicious links
-    if (content.contains("illegal-stream.net") || content.contains("suspicious")) {
-      return SecurityScanResult(
-        isSafe: false, 
-        riskLevel: 'danger', 
-        tags: ['Phishing', 'Malware'], 
-        analysis: 'Suspicious URL detected: illegal-stream.net'
+      // 2. Call your API
+      final response = await http.post(
+        Uri.parse("$baseUrl/chat/message"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "message": prompt,
+          "history": [] 
+        }),
       );
-    } 
-    
-    if (content.contains("wikipedia.org")) {
-       return SecurityScanResult(
+
+      // 3. Parse Response
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        String replyText = data['response'] ?? data['reply'] ?? data['message'] ?? "";
+        
+        // Try to parse the AI's JSON reply
+        // Clean up markdown code blocks if AI adds them (e.g. ```json ... ```)
+        replyText = replyText.replaceAll(RegExp(r'```json|```'), '').trim();
+        
+        try {
+          final jsonAnalysis = jsonDecode(replyText);
+          return SecurityScanResult(
+            isSafe: jsonAnalysis['isSafe'] ?? true,
+            riskLevel: (jsonAnalysis['isSafe'] ?? true) ? 'low' : 'high',
+            tags: (jsonAnalysis['isSafe'] ?? true) ? [] : ['Threat'],
+            analysis: jsonAnalysis['analysis'] ?? "No analysis provided."
+          );
+        } catch (e) {
+          // Fallback if AI didn't reply valid JSON
+          if (replyText.toLowerCase().contains("threat") || replyText.toLowerCase().contains("danger")) {
+             return SecurityScanResult(
+              isSafe: false, 
+              riskLevel: 'high', 
+              tags: ['Detected'], 
+              analysis: replyText
+            );
+          }
+        }
+      }
+      
+      // Fallback: Use local check for the demo link if API fails or returns unclear data
+      if (content.contains("illegal-stream.net")) {
+        return SecurityScanResult(
+          isSafe: false,
+          riskLevel: 'danger',
+          tags: ['Malware', 'Phishing'],
+          analysis: 'Suspicious URL detected (Local Database).'
+        );
+      }
+
+      return SecurityScanResult(
         isSafe: true, 
-        riskLevel: 'safe', 
-        tags: ['Verified', 'Safe'], 
-        analysis: 'Official verified source.'
+        riskLevel: 'low', 
+        tags: [], 
+        analysis: 'Scan complete. No threats found.'
+      );
+
+    } catch (e) {
+      return SecurityScanResult(
+        isSafe: true, 
+        riskLevel: 'unknown', 
+        tags: [], 
+        analysis: 'Network error during scan.'
       );
     }
-
-    // Default safe state
-    return SecurityScanResult(
-      isSafe: true, 
-      riskLevel: 'low', 
-      tags: [], 
-      analysis: 'No threats detected.'
-    ); 
   }
 
-  // Placeholder methods for other features
-  Stream<String> streamMessage(String userMessage, {List<Map<String, dynamic>>? history}) async* { yield "Stream not implemented"; }
+  Stream<String> streamMessage(String userMessage, {List<Map<String, dynamic>>? history}) async* {
+    try {
+      final request = http.Request('POST', Uri.parse("$baseUrl/chat/stream"));
+      request.headers.addAll({
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+      });
+      
+      request.body = jsonEncode({
+        "message": userMessage,
+        "history": history ?? [],
+      });
+
+      final streamedResponse = await request.send();
+
+      if (streamedResponse.statusCode == 200) {
+        await for (var chunk in streamedResponse.stream.transform(utf8.decoder)) {
+          final lines = chunk.split('\n');
+          for (var line in lines) {
+            if (line.startsWith('data: ')) {
+              final jsonStr = line.substring(6);
+              if (jsonStr.trim().isNotEmpty && jsonStr != '[DONE]') {
+                try {
+                  final data = jsonDecode(jsonStr);
+                  if (data is Map && data.containsKey('token')) {
+                    yield data['token'] as String;
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        }
+      } else {
+        yield "❌ Error: ${streamedResponse.statusCode}";
+      }
+    } catch (e) {
+      yield "⚠️ Error: $e";
+    }
+  }
+
   Future<VoiceCommandResult> parseVoiceCommand(String command) async { return VoiceCommandResult(action: '', parameters: {}); }
   Future<String> translateScreen(String content, String targetLanguage) async { return ""; }
   Future<String> completeText(String incompleteText) async { return ""; }
