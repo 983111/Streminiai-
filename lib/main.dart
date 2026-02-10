@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
-import 'package:stremini_chatbot/providers/scanner_provider.dart';
+// REMOVED: import 'package:stremini_chatbot/providers/scanner_provider.dart';
 import 'core/theme/app_theme.dart';
 import 'screens/home/home_screen.dart';
 import 'utils/session_lifecycle_manager.dart';
@@ -38,29 +38,11 @@ class _AppWithContainerState extends ConsumerState<_AppWithContainer> {
     if (_AppWithContainerState.globalContainer == null) {
       _AppWithContainerState.globalContainer =
           ProviderScope.containerOf(context);
-      _setupScannerListeners();
+      // REMOVED: _setupScannerListeners();
     }
   }
 
-  void _setupScannerListeners() {
-    if (_AppWithContainerState.globalContainer == null) return;
-
-    platform.setMethodCallHandler((call) async {
-      final notifier = _AppWithContainerState.globalContainer!
-          .read(scannerStateProvider.notifier);
-
-      switch (call.method) {
-        case 'startScanner':
-          print('Scanner button clicked - starting scanner');
-          await notifier.startScanning();
-          return true;
-        case 'stopScanner':
-          print('Scanner button clicked - stopping scanner');
-          await notifier.stopScanning();
-          return false;
-      }
-    });
-  }
+  // REMOVED: void _setupScannerListeners() { ... }
 
   @override
   Widget build(BuildContext context) {
