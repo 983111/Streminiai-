@@ -37,7 +37,7 @@ class ScreenReaderService : AccessibilityService() {
             ACTION_START_SCAN -> {
                 isScanning = true
                 Log.d("StreminiScanner", "API Scan Started")
-                // FIX: Suspend function must be called inside a coroutine scope
+                // FIX: Launch coroutine to call suspend function
                 serviceScope.launch {
                     performGlobalScan()
                 }
