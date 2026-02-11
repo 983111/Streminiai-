@@ -13,6 +13,7 @@ import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -28,8 +29,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
-import io.flutter.embedding.engine.FlutterEngine
-import io.flutter.embedding.engine.dart.DartExecutor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -54,6 +53,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         const val ACTION_SCANNER_STOP = "com.example.stremini_chatbot.SCANNER_STOP"
         val NEON_BLUE: Int = android.graphics.Color.parseColor("#00D9FF")
         val WHITE: Int = android.graphics.Color.parseColor("#FFFFFF")
+        
+        private const val TAG = "ChatOverlayService"
     }
 
     private lateinit var windowManager: WindowManager
@@ -71,9 +72,6 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private val activeFeatures = mutableSetOf<Int>()
     private var isScannerActive = false
     private lateinit var inputMethodManager: InputMethodManager
-    
-    // Kept from original file
-    private lateinit var scannerChannel: android.view.inputmethod.InputMethodManager
 
     private var initialX = 0
     private var initialY = 0
@@ -107,6 +105,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 ACTION_SEND_MESSAGE -> {
                     val message = intent.getStringExtra(EXTRA_MESSAGE)
                     if (message != null) {
+                        Log.d(TAG, "Received message: $message")
                         // If chat isn't visible, show it so user sees the alert
                         if (!isChatbotVisible) showFloatingChatbot()
                         addMessageToChatbot(message, isUser = false)
@@ -134,8 +133,11 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     override fun onCreate() {
         super.onCreate()
+        Log.d(TAG, "Service onCreate")
+        
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        
         startForegroundService()
         setupOverlay()
 
@@ -149,105 +151,113 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         } else {
             registerReceiver(controlReceiver, filter)
         }
+        
+        Log.d(TAG, "Service setup complete")
     }
 
     private fun setupOverlay() {
-        overlayView = LayoutInflater.from(this).inflate(R.layout.chat_bubble_layout, null)
-        bubbleIcon = overlayView.findViewById(R.id.bubble_icon)
+        try {
+            overlayView = LayoutInflater.from(this).inflate(R.layout.chat_bubble_layout, null)
+            bubbleIcon = overlayView.findViewById(R.id.bubble_icon)
 
-        menuItems = listOf(
-            overlayView.findViewById(R.id.btn_refresh),
-            overlayView.findViewById(R.id.btn_settings),
-            overlayView.findViewById(R.id.btn_ai),
-            overlayView.findViewById(R.id.btn_scanner),
-            overlayView.findViewById(R.id.btn_keyboard)
-        )
+            menuItems = listOf(
+                overlayView.findViewById(R.id.btn_refresh),
+                overlayView.findViewById(R.id.btn_settings),
+                overlayView.findViewById(R.id.btn_ai),
+                overlayView.findViewById(R.id.btn_scanner),
+                overlayView.findViewById(R.id.btn_keyboard)
+            )
 
-        val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+            val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            val radiusPx = dpToPx(radiusDp).toFloat()
+            val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
+            val collapsedWindowSizePx = (bubbleSizePx + dpToPx(10f)).toInt()
+
+            params = WindowManager.LayoutParams(
+                collapsedWindowSizePx,
+                collapsedWindowSizePx,
+                typeParam,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                PixelFormat.TRANSLUCENT
+            )
+            params.gravity = Gravity.TOP or Gravity.START
+            
+            val screenHeight = resources.displayMetrics.heightPixels
+            bubbleScreenX = 60
+            bubbleScreenY = (screenHeight * 0.25).toInt()
+            
+            val windowHalfSize = collapsedWindowSizePx / 2
+            params.x = bubbleScreenX - windowHalfSize
+            params.y = bubbleScreenY - windowHalfSize
+
+            bubbleIcon.setOnTouchListener(this)
+
+            menuItems[0].setOnClickListener {
+                collapseMenu()
+                handleRefresh()
+            }
+            menuItems[1].setOnClickListener {
+                collapseMenu()
+                handleSettings()
+            }
+            menuItems[2].setOnClickListener {
+                collapseMenu()
+                handleAIChat()
+            }
+            menuItems[3].setOnClickListener {
+                collapseMenu()
+                handleScanner()
+            }
+            menuItems[4].setOnClickListener {
+                collapseMenu()
+                handleVoiceCommand()
+            }
+
+            bubbleIcon.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            bubbleIcon.isClickable = true
+            bubbleIcon.isFocusable = true
+            
+            menuItems.forEach { 
+                it.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                it.isClickable = true
+                it.isFocusable = true
+                it.visibility = View.INVISIBLE
+            }
+
+            updateMenuItemsColor()
+            
+            overlayView.background = null
+            overlayView.isClickable = false
+            overlayView.isFocusable = false
+            overlayView.setOnTouchListener { _, _ -> false }
+            
+            windowManager.addView(overlayView, params)
+
+            (overlayView as? android.view.ViewGroup)?.apply {
+                clipToPadding = false
+                clipChildren = false
+                isMotionEventSplittingEnabled = false
+            }
+
+            overlayView.layoutParams = overlayView.layoutParams?.apply {
+                width = params.width
+                height = params.height
+            }
+            overlayView.requestLayout()
+            
+            Log.d(TAG, "Overlay view added successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting up overlay", e)
         }
-
-        val radiusPx = dpToPx(radiusDp).toFloat()
-        val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
-        val collapsedWindowSizePx = (bubbleSizePx + dpToPx(10f)).toInt()
-
-        params = WindowManager.LayoutParams(
-            collapsedWindowSizePx,
-            collapsedWindowSizePx,
-            typeParam,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT
-        )
-        params.gravity = Gravity.TOP or Gravity.START
-        
-        val screenHeight = resources.displayMetrics.heightPixels
-        bubbleScreenX = 60
-        bubbleScreenY = (screenHeight * 0.25).toInt()
-        
-        val windowHalfSize = collapsedWindowSizePx / 2
-        params.x = bubbleScreenX - windowHalfSize
-        params.y = bubbleScreenY - windowHalfSize
-
-        bubbleIcon.setOnTouchListener(this)
-
-        menuItems[0].setOnClickListener {
-            collapseMenu()
-            handleRefresh()
-        }
-        menuItems[1].setOnClickListener {
-            collapseMenu()
-            handleSettings()
-        }
-        menuItems[2].setOnClickListener {
-            collapseMenu()
-            handleAIChat()
-        }
-        menuItems[3].setOnClickListener {
-            collapseMenu()
-            handleScanner()
-        }
-        menuItems[4].setOnClickListener {
-            collapseMenu()
-            handleVoiceCommand()
-        }
-
-        bubbleIcon.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        bubbleIcon.isClickable = true
-        bubbleIcon.isFocusable = true
-        
-        menuItems.forEach { 
-            it.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            it.isClickable = true
-            it.isFocusable = true
-            it.visibility = View.INVISIBLE
-        }
-
-        updateMenuItemsColor()
-        
-        overlayView.background = null
-        overlayView.isClickable = false
-        overlayView.isFocusable = false
-        overlayView.setOnTouchListener { _, _ -> false }
-        
-        windowManager.addView(overlayView, params)
-
-        (overlayView as? android.view.ViewGroup)?.apply {
-            clipToPadding = false
-            clipChildren = false
-            isMotionEventSplittingEnabled = false
-        }
-
-        overlayView.layoutParams = overlayView.layoutParams?.apply {
-            width = params.width
-            height = params.height
-        }
-        overlayView.requestLayout()
     }
 
     private fun handleAIChat() {
@@ -262,36 +272,42 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun showFloatingChatbot() {
         if (isChatbotVisible) return
 
-        floatingChatView = LayoutInflater.from(this).inflate(R.layout.floating_chatbot_layout, null)
+        try {
+            floatingChatView = LayoutInflater.from(this).inflate(R.layout.floating_chatbot_layout, null)
 
-        val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        } else {
-            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+            val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            floatingChatParams = WindowManager.LayoutParams(
+                dpToPx(300f),
+                dpToPx(400f),
+                typeParam,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+                        WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                PixelFormat.TRANSLUCENT
+            )
+
+            floatingChatParams?.gravity = Gravity.BOTTOM or Gravity.END
+            floatingChatParams?.x = dpToPx(20f)
+            floatingChatParams?.y = dpToPx(100f)
+
+            floatingChatView?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+
+            setupFloatingChatListeners()
+
+            windowManager.addView(floatingChatView, floatingChatParams)
+            isChatbotVisible = true
+
+            addMessageToChatbot("Hello! I'm Stremini AI. How can I help you?", isUser = false)
+            
+            Log.d(TAG, "Floating chatbot shown")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error showing chatbot", e)
         }
-
-        floatingChatParams = WindowManager.LayoutParams(
-            dpToPx(300f),
-            dpToPx(400f),
-            typeParam,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT
-        )
-
-        floatingChatParams?.gravity = Gravity.BOTTOM or Gravity.END
-        floatingChatParams?.x = dpToPx(20f)
-        floatingChatParams?.y = dpToPx(100f)
-
-        floatingChatView?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-
-        setupFloatingChatListeners()
-
-        windowManager.addView(floatingChatView, floatingChatParams)
-        isChatbotVisible = true
-
-        addMessageToChatbot("Hello! I'm Stremini AI. How can I help you?", isUser = false)
     }
 
     private fun setupFloatingChatListeners() {
@@ -406,7 +422,11 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun hideFloatingChatbot() {
         if (!isChatbotVisible) return
         floatingChatView?.let { view ->
-            windowManager.removeView(view)
+            try {
+                windowManager.removeView(view)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing chatbot view", e)
+            }
             floatingChatView = null
             floatingChatParams = null
             isChatbotVisible = false
@@ -423,22 +443,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             intent.action = ScreenReaderService.ACTION_START_SCAN
             startService(intent)
             Toast.makeText(this, "Screen Detection Enabled", Toast.LENGTH_SHORT).show()
+            Log.d(TAG, "Scanner enabled")
         } else {
             intent.action = ScreenReaderService.ACTION_STOP_SCAN
             startService(intent)
             Toast.makeText(this, "Screen Detection Disabled", Toast.LENGTH_SHORT).show()
-        }
-    }
-    
-    private fun invokeFlutterMethod(methodName: String) {
-        try {
-            val intent = Intent(ACTION_SCANNER_START).apply {
-                setPackage(packageName)
-                putExtra("method", methodName)
-            }
-            sendBroadcast(intent)
-        } catch (e: Exception) {
-            e.printStackTrace()
+            Log.d(TAG, "Scanner disabled")
         }
     }
 
@@ -560,6 +570,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                         try {
                             windowManager.updateViewLayout(overlayView, params)
                         } catch (e: Exception) {
+                            Log.e(TAG, "Error updating layout", e)
                         }
                     } else {
                         if (!isMenuAnimating) collapseMenu()
@@ -708,6 +719,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 try {
                     windowManager.updateViewLayout(overlayView, params)
                 } catch (e: Exception) {
+                    Log.e(TAG, "Error in animation", e)
                 }
             }
             
@@ -725,6 +737,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     try {
                         windowManager.updateViewLayout(overlayView, params)
                     } catch (e: Exception) {
+                        Log.e(TAG, "Error in animation end", e)
                     }
 
                     onEnd?.invoke()
@@ -762,6 +775,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 try {
                     windowManager.updateViewLayout(overlayView, params)
                 } catch (e: Exception) {
+                    Log.e(TAG, "Error snapping to edge", e)
                 }
             }
             start()
@@ -792,9 +806,20 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        Log.d(TAG, "Service onDestroy")
         serviceScope.cancel()
-        unregisterReceiver(controlReceiver)
+        try {
+            unregisterReceiver(controlReceiver)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering receiver", e)
+        }
         hideFloatingChatbot()
-        if (::overlayView.isInitialized && overlayView.windowToken != null) windowManager.removeView(overlayView)
+        if (::overlayView.isInitialized && overlayView.windowToken != null) {
+            try {
+                windowManager.removeView(overlayView)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error removing overlay view", e)
+            }
+        }
     }
 }
