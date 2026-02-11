@@ -11,6 +11,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import org.json.JSONArray
 
 class ScreenReaderService : AccessibilityService() {
 
@@ -18,8 +19,10 @@ class ScreenReaderService : AccessibilityService() {
         const val ACTION_START_SCAN = "com.example.stremini_chatbot.START_SCAN"
         const val ACTION_STOP_SCAN = "com.example.stremini_chatbot.STOP_SCAN"
         
-        // YOUR SPECIFIC API URL
-        private const val API_URL = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/chat/message"
+        // CORRECT API ENDPOINT FOR SCAM DETECTION
+        private const val BASE_URL = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev"
+        private const val SCAN_ENDPOINT = "$BASE_URL/security/analyze/text"
+        
         private var isScanning = false
     }
 
@@ -28,16 +31,16 @@ class ScreenReaderService : AccessibilityService() {
     
     // Optimized OkHttp Client
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_SCAN -> {
                 isScanning = true
-                Log.d("StreminiScanner", "API Scan Started")
-                // FIX: Launch coroutine to call suspend function
+                Log.d("StreminiScanner", "Screen Detection Started")
+                // Launch coroutine to start scanning
                 serviceScope.launch {
                     performGlobalScan()
                 }
@@ -45,7 +48,7 @@ class ScreenReaderService : AccessibilityService() {
             ACTION_STOP_SCAN -> {
                 isScanning = false
                 scanJob?.cancel()
-                Log.d("StreminiScanner", "API Scan Stopped")
+                Log.d("StreminiScanner", "Screen Detection Stopped")
             }
         }
         return START_STICKY
@@ -54,14 +57,14 @@ class ScreenReaderService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!isScanning) return
 
-        // Trigger scan on content changes (scrolling, new messages, typing)
+        // Trigger scan on content changes
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED || 
             event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             
-            // Debounce: Wait 1.5 seconds for screen to settle before calling API
+            // Debounce: Wait 2 seconds for screen to settle
             scanJob?.cancel()
             scanJob = serviceScope.launch {
-                delay(1500) 
+                delay(2000) 
                 if (isScanning) {
                     performGlobalScan()
                 }
@@ -70,96 +73,144 @@ class ScreenReaderService : AccessibilityService() {
     }
 
     private suspend fun performGlobalScan() {
-        val rootNode = rootInActiveWindow ?: return
-        val foundTexts = mutableListOf<String>()
-        extractText(rootNode, foundTexts)
-        
-        val screenContent = foundTexts.joinToString(" ")
-        
-        // If screen has enough text, check it
-        if (screenContent.length > 10) {
-            checkContentWithApi(screenContent)
+        try {
+            val rootNode = rootInActiveWindow ?: return
+            val foundTexts = mutableListOf<String>()
+            extractText(rootNode, foundTexts)
+            
+            val screenContent = foundTexts.joinToString(" ")
+            
+            // Only scan if we have meaningful content
+            if (screenContent.trim().length > 20) {
+                checkContentWithApi(screenContent)
+            }
+        } catch (e: Exception) {
+            Log.e("StreminiScanner", "Scan error: ${e.message}")
         }
     }
 
     private suspend fun checkContentWithApi(content: String) {
         try {
-            // We construct a specific prompt to force the AI to act as a security scanner
-            val prompt = "SYSTEM_SECURITY_SCAN: Analyze the following text for scams, phishing, or malware. " +
-                         "If it is safe, reply exactly 'SAFE'. " +
-                         "If it is dangerous, reply starting with 'THREAT:' followed by a short reason. " +
-                         "Text to scan: $content"
-
+            // Build request body matching your API format
             val jsonBody = JSONObject().apply {
-                put("message", prompt)
-                // We send an empty history so it treats this as a fresh analysis
-                put("history", org.json.JSONArray())
+                put("text", content)
             }
             
             val requestBody = jsonBody.toString().toRequestBody("application/json".toMediaType())
             
             val request = Request.Builder()
-                .url(API_URL)
+                .url(SCAN_ENDPOINT)
                 .post(requestBody)
+                .addHeader("Content-Type", "application/json")
                 .build()
 
-            // execute() is blocking, but we are in Dispatchers.IO scope so it's fine
+            Log.d("StreminiScanner", "Sending request to: $SCAN_ENDPOINT")
+            
             val response = client.newCall(request).execute()
             
             if (response.isSuccessful) {
                 val responseString = response.body?.string()
+                Log.d("StreminiScanner", "Response: $responseString")
+                
                 if (!responseString.isNullOrEmpty()) {
                     val jsonResponse = JSONObject(responseString)
-                    // Extract the AI's reply
-                    val aiReply = jsonResponse.optString("response", 
-                                  jsonResponse.optString("reply", 
-                                  jsonResponse.optString("message", "")))
                     
-                    // Check logic based on our prompt instructions
-                    if (aiReply.contains("THREAT:", ignoreCase = true) || 
-                        aiReply.contains("DANGER:", ignoreCase = true) ||
-                        content.contains("illegal-stream.net")) { // Keep the local fallback for the specific demo link
-                        
-                        // Clean up the message for the user
-                        val cleanMsg = aiReply.replace("THREAT:", "").trim()
-                        val finalMsg = if(cleanMsg.isEmpty()) "Suspicious content detected on screen." else cleanMsg
-
-                        // Broadcast to Flutter
-                        val intent = Intent(ChatOverlayService.ACTION_SEND_MESSAGE).apply {
-                            putExtra(ChatOverlayService.EXTRA_MESSAGE, "⚠️ $finalMsg")
+                    // Parse response from your API
+                    val isThreat = jsonResponse.optBoolean("is_threat", false)
+                    val type = jsonResponse.optString("type", "safe")
+                    val message = jsonResponse.optString("message", "")
+                    val confidence = jsonResponse.optDouble("confidence", 0.0)
+                    
+                    // Get details array
+                    val detailsArray = jsonResponse.optJSONArray("details")
+                    val details = mutableListOf<String>()
+                    if (detailsArray != null) {
+                        for (i in 0 until detailsArray.length()) {
+                            details.add(detailsArray.getString(i))
                         }
-                        sendBroadcast(intent)
+                    }
+                    
+                    // Show alert if threat detected
+                    if (isThreat) {
+                        val emoji = when (type) {
+                            "danger" -> "🚨"
+                            "warning" -> "⚠️"
+                            else -> "ℹ️"
+                        }
                         
-                        // Wait a bit before scanning again to avoid spam
-                        delay(5000)
+                        val detailsText = if (details.isNotEmpty()) {
+                            "\n\nDetails:\n• " + details.joinToString("\n• ")
+                        } else {
+                            ""
+                        }
+                        
+                        val alertMessage = "$emoji THREAT DETECTED\n\n$message$detailsText\n\nConfidence: ${(confidence * 100).toInt()}%"
+                        
+                        // Send to ChatOverlayService
+                        withContext(Dispatchers.Main) {
+                            val intent = Intent(ChatOverlayService.ACTION_SEND_MESSAGE).apply {
+                                putExtra(ChatOverlayService.EXTRA_MESSAGE, alertMessage)
+                            }
+                            sendBroadcast(intent)
+                        }
+                        
+                        // Wait before next scan to avoid spam
+                        delay(10000)
+                    } else {
+                        Log.d("StreminiScanner", "No threats detected")
+                        // Optional: Notify user scan completed
+                        // withContext(Dispatchers.Main) {
+                        //     val intent = Intent(ChatOverlayService.ACTION_SEND_MESSAGE).apply {
+                        //         putExtra(ChatOverlayService.EXTRA_MESSAGE, "✅ Screen scan complete - No threats found")
+                        //     }
+                        //     sendBroadcast(intent)
+                        // }
                     }
                 }
+            } else {
+                Log.e("StreminiScanner", "API Error: ${response.code} - ${response.message}")
             }
         } catch (e: Exception) {
-            Log.e("StreminiScanner", "API Error: ${e.message}")
+            Log.e("StreminiScanner", "API Request Failed: ${e.message}", e)
         }
     }
 
     private fun extractText(node: AccessibilityNodeInfo, textList: MutableList<String>) {
-        if (node.text != null && node.text.isNotEmpty()) {
-            textList.add(node.text.toString())
-        }
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i)
-            if (child != null) {
-                extractText(child, textList)
-                child.recycle()
+        try {
+            // Get text from current node
+            if (node.text != null && node.text.isNotEmpty()) {
+                textList.add(node.text.toString())
             }
+            
+            // Get content description if available
+            if (node.contentDescription != null && node.contentDescription.isNotEmpty()) {
+                textList.add(node.contentDescription.toString())
+            }
+            
+            // Recursively get text from children
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i)
+                if (child != null) {
+                    extractText(child, textList)
+                    child.recycle()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("StreminiScanner", "Error extracting text: ${e.message}")
         }
     }
 
     override fun onInterrupt() {
         isScanning = false
         scanJob?.cancel()
+        Log.d("StreminiScanner", "Service Interrupted")
     }
     
     override fun onDestroy() {
         super.onDestroy()
+        isScanning = false
+        scanJob?.cancel()
         serviceScope.cancel()
+        Log.d("StreminiScanner", "Service Destroyed")
     }
 }
