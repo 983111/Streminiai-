@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
+  // Ensure this matches the deployed URL of your security.js worker
   static const String baseUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev";
   
   Future<void> initSession() async {}
@@ -45,7 +46,6 @@ class ApiService {
         }
         return data.toString();
       } else {
-        // Parse error message for debugging
         try {
           final errData = jsonDecode(response.body);
           return "❌ Error: ${errData['error'] ?? response.statusCode}";
@@ -98,8 +98,62 @@ class ApiService {
     }
   }
 
-  // Keep existing methods
-  Future<SecurityScanResult> scanContent(String content) async { return SecurityScanResult(isSafe: true, riskLevel: 'low', tags: [], analysis: ''); }
+  // --- UPDATED METHOD: Connects to security.js /scan-content endpoint ---
+  Future<SecurityScanResult> scanContent(String content) async {
+    try {
+      final response = await http.post(
+        Uri.parse("$baseUrl/scan-content"),
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: jsonEncode({"content": content}), // security.js expects 'content' or 'text'
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        
+        // Extract matched text from the 'taggedElements' list in the response
+        List<String> extractedTags = [];
+        if (data['taggedElements'] != null) {
+          extractedTags = (data['taggedElements'] as List)
+              .map<String>((e) => e['matchedText']?.toString() ?? '')
+              .where((s) => s.isNotEmpty)
+              .toList();
+        }
+
+        return SecurityScanResult(
+          isSafe: data['isSafe'] ?? false,
+          riskLevel: data['riskLevel'] ?? 'unknown',
+          tags: extractedTags,
+          analysis: data['summary'] ?? 'No analysis provided',
+        );
+      } else {
+        // Handle server errors
+        String errorMsg = "Scan failed (${response.statusCode})";
+        try {
+          final errData = jsonDecode(response.body);
+          if (errData['error'] != null) errorMsg = errData['error'];
+        } catch (_) {}
+        
+        return SecurityScanResult(
+          isSafe: false,
+          riskLevel: 'error',
+          tags: [],
+          analysis: errorMsg,
+        );
+      }
+    } catch (e) {
+      return SecurityScanResult(
+        isSafe: false,
+        riskLevel: 'error',
+        tags: [],
+        analysis: "Network Error: $e",
+      );
+    }
+  }
+
+  // Stubs for other methods
   Future<VoiceCommandResult> parseVoiceCommand(String command) async { return VoiceCommandResult(action: '', parameters: {}); }
   Future<String> translateScreen(String content, String targetLanguage) async { return ""; }
   Future<String> completeText(String incompleteText) async { return ""; }
@@ -109,12 +163,27 @@ class ApiService {
 }
 
 class SecurityScanResult {
-  final bool isSafe; final String riskLevel; final List<String> tags; final String analysis;
-  SecurityScanResult({required this.isSafe, required this.riskLevel, required this.tags, required this.analysis});
+  final bool isSafe; 
+  final String riskLevel; 
+  final List<String> tags; 
+  final String analysis;
+  
+  SecurityScanResult({
+    required this.isSafe, 
+    required this.riskLevel, 
+    required this.tags, 
+    required this.analysis
+  });
 }
+
 class VoiceCommandResult {
-  final String action; final Map<String, dynamic> parameters;
-  VoiceCommandResult({required this.action, required this.parameters});
+  final String action; 
+  final Map<String, dynamic> parameters;
+  
+  VoiceCommandResult({
+    required this.action, 
+    required this.parameters
+  });
 }
 
 final apiServiceProvider = Provider<ApiService>((ref) => ApiService());
