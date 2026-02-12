@@ -4,183 +4,136 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="#000000"
-    android:padding="8dp">
-
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="8dp"
-        android:gravity="center_vertical">
-
-        <ImageButton
-            android:id="@+id/btn_voice"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:src="@android:drawable/ic_btn_speak_now"
-            android:background="@drawable/circle_bg_blue"
-            android:scaleType="fitCenter"
-            android:padding="10dp"
-            android:contentDescription="Voice Input"/>
-
-        <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:layout_marginEnd="8dp"
-            android:orientation="horizontal"
-            android:background="#1A1A1A"
-            android:padding="12dp"
-            android:gravity="center_vertical">
-
-            <EditText
-                android:id="@+id/ai_input_field"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="Type with AI assistance..."
-                android:textColorHint="#666666"
-                android:textColor="#FFFFFF"
-                android:textSize="15sp"
-                android:background="@null"
-                android:maxLines="3"
-                android:inputType="textMultiLine|textCapSentences"/>
-
-            <ProgressBar
-                android:id="@+id/loading_indicator"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
-                android:layout_marginStart="8dp"
-                android:visibility="gone"
-                style="@android:style/Widget.ProgressBar.Small"/>
-        </LinearLayout>
-
-        <ImageButton
-            android:id="@+id/btn_send"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:src="@android:drawable/ic_menu_send"
-            android:background="@drawable/send_button_bg"
-            android:scaleType="fitCenter"
-            android:padding="10dp"
-            android:contentDescription="Send"/>
-    </LinearLayout>
+    android:paddingTop="8dp"
+    android:paddingBottom="4dp">
 
     <HorizontalScrollView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
         android:scrollbars="none"
-        android:paddingHorizontal="8dp">
-
-        <LinearLayout
-            android:id="@+id/suggestions_container"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"/>
-    </HorizontalScrollView>
-
-    <HorizontalScrollView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:scrollbars="none"
-        android:paddingHorizontal="8dp">
+        android:paddingHorizontal="4dp"
+        android:clipToPadding="false"
+        android:layout_marginBottom="8dp">
 
         <LinearLayout
             android:id="@+id/quick_actions_container"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:gravity="center_vertical"/>
+            android:gravity="center_vertical">
+            
+            <TextView
+                android:id="@+id/action_undo"
+                style="@style/KeyboardChip"
+                android:text="⟲"
+                android:background="@drawable/chip_background"/>
+
+            <TextView
+                android:id="@+id/action_improve"
+                style="@style/KeyboardChip"
+                android:text="✨ Improve"
+                android:background="@drawable/chip_background"/>
+
+            <TextView
+                android:id="@+id/action_complete"
+                style="@style/KeyboardChip"
+                android:text="⚡ Complete"
+                android:background="@drawable/chip_background"/>
+                
+             <TextView
+                android:id="@+id/action_tone"
+                style="@style/KeyboardChip"
+                android:text="🎨 Tone Changer"
+                android:background="@drawable/chip_background"/>
+                
+        </LinearLayout>
     </HorizontalScrollView>
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:layout_marginTop="12dp"
-        android:paddingHorizontal="4dp">
+        android:paddingHorizontal="2dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="4dp">
+            android:layout_marginBottom="6dp">
 
-            <TextView style="@style/KeyboardKey" android:text="1"/>
-            <TextView style="@style/KeyboardKey" android:text="2"/>
-            <TextView style="@style/KeyboardKey" android:text="3"/>
-            <TextView style="@style/KeyboardKey" android:text="4"/>
-            <TextView style="@style/KeyboardKey" android:text="5"/>
-            <TextView style="@style/KeyboardKey" android:text="6"/>
-            <TextView style="@style/KeyboardKey" android:text="7"/>
-            <TextView style="@style/KeyboardKey" android:text="8"/>
-            <TextView style="@style/KeyboardKey" android:text="9"/>
-            <TextView style="@style/KeyboardKey" android:text="0"/>
+            <TextView style="@style/KeyboardKey" android:text="1" android:id="@+id/key_1"/>
+            <TextView style="@style/KeyboardKey" android:text="2" android:id="@+id/key_2"/>
+            <TextView style="@style/KeyboardKey" android:text="3" android:id="@+id/key_3"/>
+            <TextView style="@style/KeyboardKey" android:text="4" android:id="@+id/key_4"/>
+            <TextView style="@style/KeyboardKey" android:text="5" android:id="@+id/key_5"/>
+            <TextView style="@style/KeyboardKey" android:text="6" android:id="@+id/key_6"/>
+            <TextView style="@style/KeyboardKey" android:text="7" android:id="@+id/key_7"/>
+            <TextView style="@style/KeyboardKey" android:text="8" android:id="@+id/key_8"/>
+            <TextView style="@style/KeyboardKey" android:text="9" android:id="@+id/key_9"/>
+            <TextView style="@style/KeyboardKey" android:text="0" android:id="@+id/key_0"/>
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="4dp">
+            android:layout_marginBottom="6dp">
 
-            <TextView style="@style/KeyboardKey" android:text="q"/>
-            <TextView style="@style/KeyboardKey" android:text="w"/>
-            <TextView style="@style/KeyboardKey" android:text="e"/>
-            <TextView style="@style/KeyboardKey" android:text="r"/>
-            <TextView style="@style/KeyboardKey" android:text="t"/>
-            <TextView style="@style/KeyboardKey" android:text="y"/>
-            <TextView style="@style/KeyboardKey" android:text="u"/>
-            <TextView style="@style/KeyboardKey" android:text="i"/>
-            <TextView style="@style/KeyboardKey" android:text="o"/>
-            <TextView style="@style/KeyboardKey" android:text="p"/>
+            <TextView style="@style/KeyboardKey" android:text="q" android:id="@+id/key_q"/>
+            <TextView style="@style/KeyboardKey" android:text="w" android:id="@+id/key_w"/>
+            <TextView style="@style/KeyboardKey" android:text="e" android:id="@+id/key_e"/>
+            <TextView style="@style/KeyboardKey" android:text="r" android:id="@+id/key_r"/>
+            <TextView style="@style/KeyboardKey" android:text="t" android:id="@+id/key_t"/>
+            <TextView style="@style/KeyboardKey" android:text="y" android:id="@+id/key_y"/>
+            <TextView style="@style/KeyboardKey" android:text="u" android:id="@+id/key_u"/>
+            <TextView style="@style/KeyboardKey" android:text="i" android:id="@+id/key_i"/>
+            <TextView style="@style/KeyboardKey" android:text="o" android:id="@+id/key_o"/>
+            <TextView style="@style/KeyboardKey" android:text="p" android:id="@+id/key_p"/>
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="4dp"
-            android:paddingHorizontal="20dp">
+            android:layout_marginBottom="6dp"
+            android:paddingHorizontal="12dp">
 
-            <TextView style="@style/KeyboardKey" android:text="a"/>
-            <TextView style="@style/KeyboardKey" android:text="s"/>
-            <TextView style="@style/KeyboardKey" android:text="d"/>
-            <TextView style="@style/KeyboardKey" android:text="f"/>
-            <TextView style="@style/KeyboardKey" android:text="g"/>
-            <TextView style="@style/KeyboardKey" android:text="h"/>
-            <TextView style="@style/KeyboardKey" android:text="j"/>
-            <TextView style="@style/KeyboardKey" android:text="k"/>
-            <TextView style="@style/KeyboardKey" android:text="l"/>
+            <TextView style="@style/KeyboardKey" android:text="a" android:id="@+id/key_a"/>
+            <TextView style="@style/KeyboardKey" android:text="s" android:id="@+id/key_s"/>
+            <TextView style="@style/KeyboardKey" android:text="d" android:id="@+id/key_d"/>
+            <TextView style="@style/KeyboardKey" android:text="f" android:id="@+id/key_f"/>
+            <TextView style="@style/KeyboardKey" android:text="g" android:id="@+id/key_g"/>
+            <TextView style="@style/KeyboardKey" android:text="h" android:id="@+id/key_h"/>
+            <TextView style="@style/KeyboardKey" android:text="j" android:id="@+id/key_j"/>
+            <TextView style="@style/KeyboardKey" android:text="k" android:id="@+id/key_k"/>
+            <TextView style="@style/KeyboardKey" android:text="l" android:id="@+id/key_l"/>
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginBottom="4dp">
+            android:layout_marginBottom="6dp">
 
             <TextView
+                android:id="@+id/key_shift"
                 style="@style/KeyboardSpecialKey"
                 android:text="⇧"
-                android:layout_weight="1.5"/>
+                android:layout_weight="1.3"/>
 
-            <TextView style="@style/KeyboardKey" android:text="z"/>
-            <TextView style="@style/KeyboardKey" android:text="x"/>
-            <TextView style="@style/KeyboardKey" android:text="c"/>
-            <TextView style="@style/KeyboardKey" android:text="v"/>
-            <TextView style="@style/KeyboardKey" android:text="b"/>
-            <TextView style="@style/KeyboardKey" android:text="n"/>
-            <TextView style="@style/KeyboardKey" android:text="m"/>
+            <TextView style="@style/KeyboardKey" android:text="z" android:id="@+id/key_z"/>
+            <TextView style="@style/KeyboardKey" android:text="x" android:id="@+id/key_x"/>
+            <TextView style="@style/KeyboardKey" android:text="c" android:id="@+id/key_c"/>
+            <TextView style="@style/KeyboardKey" android:text="v" android:id="@+id/key_v"/>
+            <TextView style="@style/KeyboardKey" android:text="b" android:id="@+id/key_b"/>
+            <TextView style="@style/KeyboardKey" android:text="n" android:id="@+id/key_n"/>
+            <TextView style="@style/KeyboardKey" android:text="m" android:id="@+id/key_m"/>
 
             <TextView
+                android:id="@+id/key_backspace"
                 style="@style/KeyboardSpecialKey"
                 android:text="⌫"
-                android:layout_weight="1.5"/>
+                android:layout_weight="1.3"/>
         </LinearLayout>
 
         <LinearLayout
@@ -189,29 +142,43 @@
             android:orientation="horizontal">
 
             <TextView
+                android:id="@+id/key_symbols"
                 style="@style/KeyboardSpecialKey"
                 android:text="\?123"
+                android:textSize="12sp"
                 android:layout_weight="1.2"/>
+            
+            <TextView
+                 android:id="@+id/key_comma"
+                 style="@style/KeyboardSpecialKey"
+                 android:text=","
+                 android:layout_weight="1"/>
 
             <TextView
-                style="@style/KeyboardKey"
-                android:text=","
+                android:id="@+id/key_voice"
+                style="@style/KeyboardSpecialKey"
+                android:text="🎤"
                 android:layout_weight="1"/>
-
+            
             <TextView
-                style="@style/KeyboardSpaceKey"
-                android:text="Space"
+                android:id="@+id/key_space"
+                style="@style/KeyboardKey"
+                android:text="space"
+                android:textColor="#AAAAAA"
+                android:textSize="12sp" 
                 android:layout_weight="4"/>
 
             <TextView
+                android:id="@+id/key_dot"
                 style="@style/KeyboardKey"
                 android:text="."
                 android:layout_weight="1"/>
 
             <TextView
-                style="@style/KeyboardEnterKey"
-                android:text="↵"
-                android:layout_weight="1.5"/>
+                android:id="@+id/key_enter"
+                style="@style/KeyboardActionKey"
+                android:text="return"
+                android:layout_weight="1.8"/>
         </LinearLayout>
     </LinearLayout>
 </LinearLayout>
