@@ -531,6 +531,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     put("query", command)
                     put("instruction", command)
                     put("ui_context", JSONObject())
+                    // Request real execution instead of plan-only previews.
+                    put("execute", true)
+                    put("dryRun", false)
+                    put("autoExecute", true)
                 }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder()
@@ -545,8 +549,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     try {
                         val json = JSONObject(raw)
                         when {
+                            json.has("execution_result") -> "Task executed\n\n${json.opt("execution_result")}"
+                            json.has("result") -> "Task executed\n\n${json.opt("result")}"
                             json.has("summary") -> json.optString("summary") + "\n\n" + json.toString(2)
-                            json.has("plan") -> "Plan ready\n\n" + json.optJSONArray("plan").toString()
+                            json.has("plan") -> "Plan generated only\n\n" + json.optJSONArray("plan").toString()
                             else -> json.toString(2)
                         }
                     } catch (_: Exception) {
@@ -557,12 +563,17 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 }
 
                 withContext(Dispatchers.Main) {
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Task plan ready"
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text =
+                        if (responseText.startsWith("Plan generated only")) {
+                            "Plan ready (execution unavailable)"
+                        } else {
+                            "Task completed"
+                        }
                     autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = responseText
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Failed to reach task planner"
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Failed to execute task"
                     autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = e.message ?: "Unknown error"
                 }
             }
