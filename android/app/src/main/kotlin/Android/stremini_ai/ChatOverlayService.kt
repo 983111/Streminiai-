@@ -544,29 +544,24 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     .build()
 
                 val response = client.newCall(request).execute()
-                var uiStatus: String
-                var uiOutput: String
-
-                if (response.isSuccessful) {
+                val (uiStatus, uiOutput) = if (response.isSuccessful) {
                     val raw = response.body?.string().orEmpty()
                     try {
                         val json = JSONObject(raw)
-
                         when {
                             json.has("execution_result") || json.has("result") -> {
-                                uiStatus = "Task completed"
                                 val resultValue = if (json.has("execution_result")) json.opt("execution_result") else json.opt("result")
-                                uiOutput = "Task executed\n\n$resultValue"
+                                "Task completed" to "Task executed\n\n$resultValue"
                             }
                             json.has("plan") -> {
                                 val localExecutionSummary = executePlanLocally(json.optJSONArray("plan"))
                                 if (localExecutionSummary != null && localExecutionSummary.executed > 0) {
-                                    uiStatus = if (localExecutionSummary.failed > 0) {
+                                    val status = if (localExecutionSummary.failed > 0) {
                                         "Task partially completed"
                                     } else {
                                         "Task completed"
                                     }
-                                    uiOutput = buildString {
+                                    val output = buildString {
                                         append("Plan received and executed on device\n")
                                         append("Executed: ${localExecutionSummary.executed}")
                                         append(" | Skipped: ${localExecutionSummary.skipped}")
@@ -578,27 +573,25 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                                         append("Original plan:\n")
                                         append(json.optJSONArray("plan")?.toString(2) ?: "[]")
                                     }
+                                    status to output
                                 } else {
-                                    uiStatus = "Plan ready (execution unavailable)"
-                                    uiOutput = "Plan generated only\n\n" + (json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                    "Plan ready (execution unavailable)" to (
+                                        "Plan generated only\n\n" + (json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                    )
                                 }
                             }
                             json.has("summary") -> {
-                                uiStatus = "Task response received"
-                                uiOutput = json.optString("summary") + "\n\n" + json.toString(2)
+                                "Task response received" to (json.optString("summary") + "\n\n" + json.toString(2))
                             }
                             else -> {
-                                uiStatus = "Task response received"
-                                uiOutput = json.toString(2)
+                                "Task response received" to json.toString(2)
                             }
                         }
                     } catch (_: Exception) {
-                        uiStatus = "Task response received"
-                        uiOutput = raw
+                        "Task response received" to raw
                     }
                 } else {
-                    uiStatus = "Failed to execute task"
-                    uiOutput = "Server error: ${response.code}"
+                    "Failed to execute task" to "Server error: ${response.code}"
                 }
 
                 withContext(Dispatchers.Main) {
