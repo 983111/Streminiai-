@@ -7,6 +7,7 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Bundle
 import android.util.Log
 import android.view.Gravity
 import android.view.View
@@ -21,6 +22,7 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
@@ -36,6 +38,14 @@ class ScreenReaderService : AccessibilityService() {
         private var instance: ScreenReaderService? = null
         fun isRunning(): Boolean = instance != null
         fun isScanningActive(): Boolean = instance?.isScanning == true
+
+        fun runWhatsAppMessageAutomation(contactName: String, message: String): Boolean {
+            val service = instance ?: return false
+            service.serviceScope.launch {
+                service.automateWhatsAppMessage(contactName, message)
+            }
+            return true
+        }
         
         // --- THEME COLORS ---
         // Safe Theme (Green)
@@ -523,6 +533,114 @@ class ScreenReaderService : AccessibilityService() {
 
     private fun dpToPx(dp: Int): Int {
         return (dp * resources.displayMetrics.density).toInt()
+    }
+
+
+    private suspend fun automateWhatsAppMessage(contactName: String, message: String): Boolean {
+        return withContext(Dispatchers.Main) {
+            try {
+                val launchIntent = packageManager.getLaunchIntentForPackage("com.whatsapp")
+                    ?: return@withContext false
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(launchIntent)
+
+                delay(1400)
+
+                // 1) Open search
+                rootInActiveWindow?.let { root ->
+                    val searchNode = findFirstNode(root) { node ->
+                        val desc = node.contentDescription?.toString()?.lowercase().orEmpty()
+                        desc.contains("search")
+                    }
+                    performClick(searchNode)
+                }
+
+                delay(700)
+
+                // 2) Type contact name
+                rootInActiveWindow?.let { root ->
+                    val inputNode = findFirstNode(root) { node ->
+                        node.isEditable || node.className?.toString()?.contains("EditText") == true
+                    }
+                    setNodeText(inputNode, contactName)
+                }
+
+                delay(1200)
+
+                // 3) Open matching chat
+                rootInActiveWindow?.let { root ->
+                    val contactNode = findFirstNode(root) { node ->
+                        val txt = node.text?.toString()?.lowercase().orEmpty()
+                        txt.contains(contactName.lowercase())
+                    }
+                    performClick(contactNode)
+                }
+
+                delay(1000)
+
+                // 4) Enter message
+                rootInActiveWindow?.let { root ->
+                    val msgNode = findFirstNode(root) { node ->
+                        node.isEditable && (
+                            node.hintText?.toString()?.lowercase()?.contains("message") == true ||
+                                node.className?.toString()?.contains("EditText") == true
+                        )
+                    } ?: findFirstNode(root) { node -> node.isEditable }
+
+                    setNodeText(msgNode, message)
+                }
+
+                delay(350)
+
+                // 5) Tap send
+                val sent = rootInActiveWindow?.let { root ->
+                    val sendNode = findFirstNode(root) { node ->
+                        val desc = node.contentDescription?.toString()?.lowercase().orEmpty()
+                        val id = node.viewIdResourceName?.lowercase().orEmpty()
+                        desc.contains("send") || id.contains("send")
+                    }
+                    performClick(sendNode)
+                } ?: false
+
+                sent
+            } catch (e: Exception) {
+                Log.e(TAG, "WhatsApp automation failed", e)
+                false
+            }
+        }
+    }
+
+    private fun findFirstNode(root: AccessibilityNodeInfo, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            if (predicate(node)) return node
+            for (i in 0 until node.childCount) {
+                node.getChild(i)?.let { queue.add(it) }
+            }
+        }
+        return null
+    }
+
+    private fun performClick(node: AccessibilityNodeInfo?): Boolean {
+        var current = node
+        while (current != null) {
+            if (current.isClickable) {
+                return current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            current = current.parent
+        }
+        return false
+    }
+
+    private fun setNodeText(node: AccessibilityNodeInfo?, value: String): Boolean {
+        val target = node ?: return false
+        val args = Bundle().apply {
+            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+        }
+        return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
     override fun onDestroy() {

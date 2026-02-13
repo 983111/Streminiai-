@@ -594,9 +594,23 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     "Failed to execute task" to "Server error: ${response.code}"
                 }
 
+                val directCommandRan = executeDirectVoiceCommand(command)
+                val finalStatus = if (directCommandRan && uiStatus.contains("response", ignoreCase = true)) {
+                    "Task completed"
+                } else {
+                    uiStatus
+                }
+                val finalOutput = if (directCommandRan && uiOutput.isNotBlank()) {
+                    "Direct device automation executed.\n\n$uiOutput"
+                } else if (directCommandRan) {
+                    "Direct device automation executed."
+                } else {
+                    uiOutput
+                }
+
                 withContext(Dispatchers.Main) {
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = uiStatus
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = uiOutput
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = finalStatus
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = finalOutput
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -672,8 +686,33 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
         val targetRaw = step.optString("target", "").lowercase().trim()
         val description = step.optString("description", "").lowercase().trim()
+        val messageText = when {
+            step.has("message") -> step.optString("message")
+            step.has("text") -> step.optString("text")
+            else -> ""
+        }
+        val contactName = when {
+            step.has("contact") -> step.optString("contact")
+            step.has("recipient") -> step.optString("recipient")
+            step.has("name") -> step.optString("name")
+            else -> ""
+        }
+        val combinedText = listOf(actionRaw, targetRaw, description, messageText.lowercase(), contactName.lowercase())
+            .joinToString(" ")
 
         return when {
+            combinedText.contains("whatsapp") && combinedText.contains("message") -> {
+                val (parsedContact, parsedMessage) = extractWhatsAppIntentFromStep(step)
+                if (parsedContact.isBlank()) return false
+
+                val finalMessage = if (parsedMessage.isBlank()) {
+                    "Hey ${parsedContact}, this is an automated message."
+                } else {
+                    parsedMessage
+                }
+
+                ScreenReaderService.runWhatsAppMessageAutomation(parsedContact, finalMessage)
+            }
             actionRaw.contains("scanner") || targetRaw.contains("scanner") || description.contains("scan") -> {
                 if (!isScannerActive) {
                     handleScanner()
@@ -719,6 +758,85 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             }
             else -> false
         }
+    }
+
+    private fun executeDirectVoiceCommand(command: String): Boolean {
+        val normalized = command.trim().lowercase()
+        if (normalized.isBlank()) return false
+
+        if (normalized.contains("whatsapp") && normalized.contains("message")) {
+            val contact = Regex("message\\s+([a-zA-Z0-9 _.-]+?)(?:\\s+that|\\s+saying|\\s+to\\s+say|$)")
+                .find(normalized)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                .orEmpty()
+
+            val message = Regex("(?:that|saying|to say)\\s+(.+)$", RegexOption.IGNORE_CASE)
+                .find(command)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                .orEmpty()
+
+            if (contact.isNotBlank()) {
+                return ScreenReaderService.runWhatsAppMessageAutomation(
+                    contactName = contact,
+                    message = if (message.isBlank()) "Hey $contact" else message
+                )
+            }
+        }
+
+        if (normalized.contains("open whatsapp")) {
+            val launchIntent = packageManager.getLaunchIntentForPackage("com.whatsapp") ?: return false
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(launchIntent)
+            return true
+        }
+
+        return false
+    }
+
+    private fun extractWhatsAppIntentFromStep(step: JSONObject): Pair<String, String> {
+        val directContact = when {
+            step.has("contact") -> step.optString("contact")
+            step.has("recipient") -> step.optString("recipient")
+            step.has("name") -> step.optString("name")
+            else -> ""
+        }.trim()
+
+        val directMessage = when {
+            step.has("message") -> step.optString("message")
+            step.has("text") -> step.optString("text")
+            else -> ""
+        }.trim()
+
+        if (directContact.isNotBlank()) {
+            return directContact to directMessage
+        }
+
+        val source = listOf(
+            step.optString("action", ""),
+            step.optString("description", ""),
+            step.optString("instruction", "")
+        ).joinToString(" ").trim()
+
+        val normalized = source.lowercase()
+        val contact = Regex("message\\s+([a-zA-Z0-9 _.-]+?)(?:\\s+that|\\s+saying|\\s+to\\s+say|$)")
+            .find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: ""
+
+        val message = Regex("(?:that|saying|to say)\\s+(.+)$", RegexOption.IGNORE_CASE)
+            .find(source)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: ""
+
+        return contact to message
     }
 
     private fun hideFloatingChatbot() {
