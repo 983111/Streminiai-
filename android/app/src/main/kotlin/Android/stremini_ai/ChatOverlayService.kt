@@ -522,17 +522,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         speechRecognizer?.startListening(intent)
     }
 
-    private fun callTaskEndpoint(url: String, payload: JSONObject): Pair<Int, String> {
-        val body = payload.toString().toRequestBody("application/json".toMediaType())
-        val request = Request.Builder()
-            .url(url)
-            .post(body)
-            .build()
-        client.newCall(request).execute().use { response ->
-            return Pair(response.code, response.body?.string().orEmpty())
-        }
-    }
-
+    // UPDATED FUNCTION with correct URL
     private fun sendVoiceTaskCommand(command: String) {
         serviceScope.launch(Dispatchers.IO) {
             try {
@@ -542,45 +532,32 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     put("instruction", command)
                     put("ui_context", JSONObject())
                 }
+                val body = payload.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    // FIXED: Added /automation prefix to match index.js mount point
+                    .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/automation/execute-task")
+                    .post(body)
+                    .build()
 
-                val primaryUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/execute-task"
-                val fallbackUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/voice-command"
-
-                var (statusCode, raw) = callTaskEndpoint(primaryUrl, payload)
-                var usedUrl = primaryUrl
-
-                if (statusCode == 404) {
-                    val fallbackPayload = JSONObject(payload.toString()).apply {
-                        put("text", command)
-                    }
-                    val fallbackResult = callTaskEndpoint(fallbackUrl, fallbackPayload)
-                    statusCode = fallbackResult.first
-                    raw = fallbackResult.second
-                    usedUrl = fallbackUrl
-                }
-
-                val responseText = if (statusCode in 200..299) {
+                val response = client.newCall(request).execute()
+                val responseText = if (response.isSuccessful) {
+                    val raw = response.body?.string().orEmpty()
                     try {
                         val json = JSONObject(raw)
                         when {
                             json.has("summary") -> json.optString("summary") + "\n\n" + json.toString(2)
                             json.has("plan") -> "Plan ready\n\n" + json.optJSONArray("plan").toString()
-                            json.has("actions") -> "Actions generated\n\n" + json.optJSONArray("actions").toString()
                             else -> json.toString(2)
                         }
                     } catch (_: Exception) {
                         raw
                     }
                 } else {
-                    "Request failed (${statusCode}) on ${usedUrl}.\n${raw}"
+                    "Server error: ${response.code}"
                 }
 
                 withContext(Dispatchers.Main) {
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = if (statusCode in 200..299) {
-                        "Task plan ready"
-                    } else {
-                        "Task generation failed"
-                    }
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Task plan ready"
                     autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = responseText
                 }
             } catch (e: Exception) {
@@ -589,6 +566,16 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = e.message ?: "Unknown error"
                 }
             }
+        }
+    }
+
+    private fun hideFloatingChatbot() {
+        if (!isChatbotVisible) return
+        floatingChatView?.let { view ->
+            windowManager.removeView(view)
+            floatingChatView = null
+            floatingChatParams = null
+            isChatbotVisible = false
         }
     }
 
@@ -989,4 +976,4 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         hideAutoTasker()
         if (::overlayView.isInitialized && overlayView.windowToken != null) windowManager.removeView(overlayView)
     }
-}
+} 
