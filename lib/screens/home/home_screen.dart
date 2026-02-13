@@ -12,8 +12,8 @@ import '../../core/widgets/info_step.dart';
 import '../../controllers/home_controller.dart';
 import '../../services/keyboard_service.dart';
 import '../chat_screen.dart';
+import '../stremini_agent_screen.dart';
 
-// Add keyboard provider
 final keyboardServiceProvider =
     Provider<KeyboardService>((ref) => KeyboardService());
 final keyboardStatusProvider = FutureProvider<KeyboardStatus>((ref) async {
@@ -73,7 +73,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             _buildSmartChatbotCard(context, state, controller),
             const SizedBox(height: 16),
 
-            // AI Keyboard Card
+            // NEW: Stremini GitHub Agent Card
+            _buildGithubAgentCard(context),
+            const SizedBox(height: 16),
+
             keyboardStatus.when(
               data: (status) => _buildKeyboardCard(context, status),
               loading: () => const SizedBox.shrink(),
@@ -171,6 +174,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           onTap: () => Navigator.pop(context),
         ),
         AppDrawerItem(
+          icon: Icons.auto_awesome,
+          title: 'Stremini Agent',
+          onTap: () {
+            Navigator.pop(context);
+            Navigator.push(context, MaterialPageRoute(builder: (context) => const StreminiAgentScreen()));
+          },
+        ),
+        AppDrawerItem(
           icon: Icons.keyboard,
           title: 'AI Keyboard',
           onTap: () {
@@ -241,7 +252,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'Your AI-powered scam protection is ready',
+            'Autonomous AI reasoning engine at your service.',
             style: AppTextStyles.subtitle1,
           ),
         ],
@@ -293,7 +304,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   : (value) async {
                       final success = await controller.toggleBubble(value);
                       if (!success && mounted) {
-                        // Revert the switch if the operation failed
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             content:
@@ -306,7 +316,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           SnackBar(
                             content: Text(
                               value
-                                  ? 'Floating bubble activated! Check your screen.'
+                                  ? 'Floating bubble activated!'
                                   : 'Floating bubble deactivated',
                             ),
                             backgroundColor:
@@ -317,6 +327,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     },
               activeColor: AppColors.primary,
             ),
+    );
+  }
+
+  Widget _buildGithubAgentCard(BuildContext context) {
+    return FeatureCard(
+      title: 'Stremini: GitHub Architect',
+      description: 'Autonomous agent for iterative repo debugging and coding',
+      icon: Icons.auto_awesome,
+      iconColor: AppColors.scanCyan,
+      status: 'Engine Ready',
+      statusColor: AppColors.success,
+      badges: const [
+        'Autonomous Agent',
+        'Repo Reasoning',
+        'Code Synthesis',
+      ],
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const StreminiAgentScreen()),
+      ),
+      trailing: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: AppColors.sweepGradient,
+        ),
+        child: const Icon(Icons.arrow_forward_ios, color: AppColors.white, size: 14),
+      ),
     );
   }
 
@@ -380,14 +418,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           const SizedBox(height: 12),
           const InfoStep(number: '1', text: 'Grant all required permissions'),
           const InfoStep(number: '2', text: 'Toggle Smart Chatbot ON'),
-          const InfoStep(
-              number: '3', text: 'Tap the floating bubble to open menu'),
-          const InfoStep(
-              number: '4', text: 'Use Scanner icon to detect scams on screen'),
+          const InfoStep(number: '3', text: 'Use Stremini Agent to debug repos'),
+          const InfoStep(number: '4', text: 'Enable AI Keyboard for smart typing'),
           const InfoStep(
               number: '5',
-              text: 'Enable AI Keyboard for smart typing',
-              color: AppColors.secondary),
+              text: 'Tap the floating bubble to open menu',
+              color: AppColors.primary),
         ],
       ),
     );
