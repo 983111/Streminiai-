@@ -11,7 +11,7 @@ class HomeState {
   const HomeState({
     this.isLoading = false,
     this.bubbleActive = false,
-    this.permissionStatus = const PermissionStatus(hasOverlay: false, hasAccessibility: false),
+    this.permissionStatus = const PermissionStatus(hasOverlay: false, hasAccessibility: false, hasMicrophone: false),
     this.errorMessage,
   });
   
@@ -65,6 +65,18 @@ class HomeController extends Notifier<HomeState> {
     }
   }
   
+
+  Future<void> requestMicrophonePermission() async {
+    try {
+      await _permissionService.requestMicrophonePermission();
+      await Future.delayed(const Duration(seconds: 1));
+      await checkPermissions();
+    } catch (e) {
+      state = state.copyWith(
+          errorMessage: 'Failed to request microphone permission');
+    }
+  }
+
   Future<bool> toggleBubble(bool value) async {
     if (!state.permissionStatus.hasOverlay) {
       await requestOverlayPermission();
@@ -72,6 +84,10 @@ class HomeController extends Notifier<HomeState> {
     }
     if (!state.permissionStatus.hasAccessibility && value) {
       await requestAccessibilityPermission();
+      return false;
+    }
+    if (!state.permissionStatus.hasMicrophone && value) {
+      await requestMicrophonePermission();
       return false;
     }
     try {

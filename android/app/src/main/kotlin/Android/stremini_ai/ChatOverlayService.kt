@@ -423,11 +423,18 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
 
-    private fun showAutoTasker() {
-        if (isAutoTaskerVisible) return
+    private fun showAutoTasker(): Boolean {
+        if (isAutoTaskerVisible) return true
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "Microphone permission is required. Please allow it from app settings.", Toast.LENGTH_LONG).show()
-            return
+            Toast.makeText(this, "Microphone permission is required. Opening app settings...", Toast.LENGTH_LONG).show()
+            try {
+                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+            } catch (_: Exception) {}
+            return false
         }
 
         autoTaskerView = LayoutInflater.from(this).inflate(R.layout.auto_tasker_overlay, null)
@@ -460,6 +467,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
         windowManager.addView(autoTaskerView, autoTaskerParams)
         isAutoTaskerVisible = true
+        startVoiceCapture()
+        return true
     }
 
     private fun hideAutoTasker() {
@@ -516,7 +525,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun sendVoiceTaskCommand(command: String) {
         serviceScope.launch(Dispatchers.IO) {
             try {
-                val payload = JSONObject().apply { put("command", command) }
+                val payload = JSONObject().apply {
+                    put("command", command)
+                    put("query", command)
+                    put("instruction", command)
+                    put("ui_context", JSONObject())
+                }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder()
                     .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/execute-task")
@@ -527,7 +541,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 val responseText = if (response.isSuccessful) {
                     val raw = response.body?.string().orEmpty()
                     try {
-                        JSONObject(raw).toString(2)
+                        val json = JSONObject(raw)
+                        when {
+                            json.has("summary") -> json.optString("summary") + "\n\n" + json.toString(2)
+                            json.has("plan") -> "Plan ready\n\n" + json.optJSONArray("plan").toString()
+                            else -> json.toString(2)
+                        }
                     } catch (_: Exception) {
                         raw
                     }
@@ -617,7 +636,11 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun handleAutoTasker() {
         toggleFeature(menuItems[0].id)
         if (isFeatureActive(menuItems[0].id)) {
-            showAutoTasker()
+            val opened = showAutoTasker()
+            if (!opened) {
+                activeFeatures.remove(menuItems[0].id)
+                updateMenuItemsColor()
+            }
         } else {
             hideAutoTasker()
         }
