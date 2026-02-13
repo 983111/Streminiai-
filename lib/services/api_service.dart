@@ -1,11 +1,12 @@
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiService {
-  // Ensure this matches the deployed URL of your security.js worker
+  // Main backend URL
   static const String baseUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev";
+  // Agentic GitHub worker URL
+  static const String githubAgentUrl = "https://agentic-github-debugger.vishwajeetadkine705.workers.dev";
   
   Future<void> initSession() async {}
   Future<void> clearSession() async {}
@@ -98,7 +99,49 @@ class ApiService {
     }
   }
 
-  // --- UPDATED METHOD: Connects to security.js /scan-content endpoint ---
+  /// NEW: Connects to the Stremini GitHub Coding Agent
+  Future<String> processGithubAgentTask({
+    required String repoOwner,
+    required String repoName,
+    required String task,
+  }) async {
+    try {
+      // Prompt engineered to ensure the API provides only code as requested
+      final prompt = "TASK: $task\n\nREQUIRED: Provide ONLY the corrected code. No explanations, no markdown intro, just the raw code content.";
+
+      final response = await http.post(
+        Uri.parse(githubAgentUrl),
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: jsonEncode({
+          "repoOwner": repoOwner,
+          "repoName": repoName,
+          "task": prompt,
+          "history": [],
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        
+        if (data['status'] == 'COMPLETED') {
+          return data['solution'] ?? "No code generated.";
+        } else if (data['status'] == 'CONTINUE') {
+          return "🔄 Agent is still reasoning... (Currently checking: ${data['nextFile']})";
+        } else if (data['status'] == 'ERROR') {
+          return "❌ Agent Error: ${data['message']}";
+        }
+        return "Unexpected response status: ${data['status']}";
+      } else {
+        return "❌ Server Error: ${response.statusCode}";
+      }
+    } catch (e) {
+      return "⚠️ Network Error: $e";
+    }
+  }
+
   Future<SecurityScanResult> scanContent(String content) async {
     try {
       final response = await http.post(
@@ -107,13 +150,11 @@ class ApiService {
           "Content-Type": "application/json",
           "Accept": "application/json",
         },
-        body: jsonEncode({"content": content}), // security.js expects 'content' or 'text'
+        body: jsonEncode({"content": content}),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        
-        // Extract matched text from the 'taggedElements' list in the response
         List<String> extractedTags = [];
         if (data['taggedElements'] != null) {
           extractedTags = (data['taggedElements'] as List)
@@ -129,31 +170,18 @@ class ApiService {
           analysis: data['summary'] ?? 'No analysis provided',
         );
       } else {
-        // Handle server errors
         String errorMsg = "Scan failed (${response.statusCode})";
         try {
           final errData = jsonDecode(response.body);
           if (errData['error'] != null) errorMsg = errData['error'];
         } catch (_) {}
-        
-        return SecurityScanResult(
-          isSafe: false,
-          riskLevel: 'error',
-          tags: [],
-          analysis: errorMsg,
-        );
+        return SecurityScanResult(isSafe: false, riskLevel: 'error', tags: [], analysis: errorMsg);
       }
     } catch (e) {
-      return SecurityScanResult(
-        isSafe: false,
-        riskLevel: 'error',
-        tags: [],
-        analysis: "Network Error: $e",
-      );
+      return SecurityScanResult(isSafe: false, riskLevel: 'error', tags: [], analysis: "Network Error: $e");
     }
   }
 
-  // Stubs for other methods
   Future<VoiceCommandResult> parseVoiceCommand(String command) async { return VoiceCommandResult(action: '', parameters: {}); }
   Future<String> translateScreen(String content, String targetLanguage) async { return ""; }
   Future<String> completeText(String incompleteText) async { return ""; }
@@ -167,23 +195,13 @@ class SecurityScanResult {
   final String riskLevel; 
   final List<String> tags; 
   final String analysis;
-  
-  SecurityScanResult({
-    required this.isSafe, 
-    required this.riskLevel, 
-    required this.tags, 
-    required this.analysis
-  });
+  SecurityScanResult({required this.isSafe, required this.riskLevel, required this.tags, required this.analysis});
 }
 
 class VoiceCommandResult {
   final String action; 
   final Map<String, dynamic> parameters;
-  
-  VoiceCommandResult({
-    required this.action, 
-    required this.parameters
-  });
+  VoiceCommandResult({required this.action, required this.parameters});
 }
 
 final apiServiceProvider = Provider<ApiService>((ref) => ApiService());
