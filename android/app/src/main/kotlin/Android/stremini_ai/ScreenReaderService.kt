@@ -46,6 +46,14 @@ class ScreenReaderService : AccessibilityService() {
             }
             return true
         }
+
+        fun runGenericAutomation(command: String): Boolean {
+            val service = instance ?: return false
+            service.serviceScope.launch {
+                service.automateGenericCommand(command)
+            }
+            return true
+        }
         
         // --- THEME COLORS ---
         // Safe Theme (Green)
@@ -535,6 +543,101 @@ class ScreenReaderService : AccessibilityService() {
         return (dp * resources.displayMetrics.density).toInt()
     }
 
+
+    private suspend fun automateGenericCommand(command: String): Boolean {
+        val normalized = command.trim().lowercase()
+        if (normalized.isBlank()) return false
+
+        return withContext(Dispatchers.Main) {
+            try {
+                when {
+                    normalized.contains("go home") || normalized == "home" -> {
+                        performGlobalAction(GLOBAL_ACTION_HOME)
+                    }
+                    normalized.contains("go back") || normalized == "back" -> {
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                    }
+                    normalized.contains("open notifications") -> {
+                        performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+                    }
+                    normalized.contains("open quick settings") -> {
+                        performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS)
+                    }
+                    normalized.startsWith("open ") || normalized.startsWith("launch ") -> {
+                        val appName = normalized.removePrefix("open ").removePrefix("launch ").trim()
+                        openAppByName(appName)
+                    }
+                    normalized.startsWith("tap ") || normalized.startsWith("click ") -> {
+                        val label = normalized.removePrefix("tap ").removePrefix("click ").trim()
+                        clickNodeByLabel(label)
+                    }
+                    normalized.startsWith("type ") -> {
+                        val value = command.trim().substringAfter(" ", "").trim()
+                        typeIntoFocusedField(value)
+                    }
+                    else -> false
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Generic automation failed", e)
+                false
+            }
+        }
+    }
+
+    private fun openAppByName(rawName: String): Boolean {
+        if (rawName.isBlank()) return false
+        val aliases = mapOf(
+            "whatsapp" to "com.whatsapp",
+            "chrome" to "com.android.chrome",
+            "youtube" to "com.google.android.youtube",
+            "instagram" to "com.instagram.android",
+            "telegram" to "org.telegram.messenger",
+            "gmail" to "com.google.android.gm",
+            "maps" to "com.google.android.apps.maps",
+            "play store" to "com.android.vending",
+            "settings" to "com.android.settings"
+        )
+
+        val packageName = aliases.entries.firstOrNull { rawName.contains(it.key) }?.value
+        val launchIntent = if (packageName != null) {
+            packageManager.getLaunchIntentForPackage(packageName)
+        } else {
+            val apps = packageManager.getInstalledApplications(0)
+            val matched = apps.firstOrNull {
+                packageManager.getApplicationLabel(it).toString().lowercase().contains(rawName)
+            }
+            matched?.let { packageManager.getLaunchIntentForPackage(it.packageName) }
+        }
+
+        launchIntent ?: return false
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(launchIntent)
+        return true
+    }
+
+    private fun clickNodeByLabel(label: String): Boolean {
+        if (label.isBlank()) return false
+        val root = rootInActiveWindow ?: return false
+        val target = findFirstNode(root) { node ->
+            val text = node.text?.toString()?.lowercase().orEmpty()
+            val contentDesc = node.contentDescription?.toString()?.lowercase().orEmpty()
+            text.contains(label) || contentDesc.contains(label)
+        }
+        return performClick(target)
+    }
+
+    private fun typeIntoFocusedField(value: String): Boolean {
+        if (value.isBlank()) return false
+        val root = rootInActiveWindow ?: return false
+
+        val focused = findFirstNode(root) { node ->
+            node.isFocused && node.isEditable
+        } ?: findFirstNode(root) { node ->
+            node.isEditable
+        }
+
+        return setNodeText(focused, value)
+    }
 
     private suspend fun automateWhatsAppMessage(contactName: String, message: String): Boolean {
         return withContext(Dispatchers.Main) {

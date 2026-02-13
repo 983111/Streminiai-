@@ -794,7 +794,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             return true
         }
 
-        return false
+        // Fallback: ask accessibility automation layer to execute broader commands.
+        return ScreenReaderService.runGenericAutomation(command)
     }
 
     private fun extractWhatsAppIntentFromStep(step: JSONObject): Pair<String, String> {
