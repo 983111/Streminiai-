@@ -544,32 +544,66 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     .build()
 
                 val response = client.newCall(request).execute()
-                val responseText = if (response.isSuccessful) {
+                val uiStatus: String
+                val uiOutput: String
+
+                if (response.isSuccessful) {
                     val raw = response.body?.string().orEmpty()
                     try {
                         val json = JSONObject(raw)
+
                         when {
-                            json.has("execution_result") -> "Task executed\n\n${json.opt("execution_result")}"
-                            json.has("result") -> "Task executed\n\n${json.opt("result")}"
-                            json.has("summary") -> json.optString("summary") + "\n\n" + json.toString(2)
-                            json.has("plan") -> "Plan generated only\n\n" + json.optJSONArray("plan").toString()
-                            else -> json.toString(2)
+                            json.has("execution_result") || json.has("result") -> {
+                                uiStatus = "Task completed"
+                                val resultValue = if (json.has("execution_result")) json.opt("execution_result") else json.opt("result")
+                                uiOutput = "Task executed\n\n$resultValue"
+                            }
+                            json.has("plan") -> {
+                                val localExecutionSummary = executePlanLocally(json.optJSONArray("plan"))
+                                if (localExecutionSummary != null && localExecutionSummary.executed > 0) {
+                                    uiStatus = if (localExecutionSummary.failed > 0) {
+                                        "Task partially completed"
+                                    } else {
+                                        "Task completed"
+                                    }
+                                    uiOutput = buildString {
+                                        append("Plan received and executed on device\n")
+                                        append("Executed: ${localExecutionSummary.executed}")
+                                        append(" | Skipped: ${localExecutionSummary.skipped}")
+                                        append(" | Failed: ${localExecutionSummary.failed}\n\n")
+                                        if (localExecutionSummary.notes.isNotBlank()) {
+                                            append(localExecutionSummary.notes)
+                                            append("\n\n")
+                                        }
+                                        append("Original plan:\n")
+                                        append(json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                    }
+                                } else {
+                                    uiStatus = "Plan ready (execution unavailable)"
+                                    uiOutput = "Plan generated only\n\n" + (json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                }
+                            }
+                            json.has("summary") -> {
+                                uiStatus = "Task response received"
+                                uiOutput = json.optString("summary") + "\n\n" + json.toString(2)
+                            }
+                            else -> {
+                                uiStatus = "Task response received"
+                                uiOutput = json.toString(2)
+                            }
                         }
                     } catch (_: Exception) {
-                        raw
+                        uiStatus = "Task response received"
+                        uiOutput = raw
                     }
                 } else {
-                    "Server error: ${response.code}"
+                    uiStatus = "Failed to execute task"
+                    uiOutput = "Server error: ${response.code}"
                 }
 
                 withContext(Dispatchers.Main) {
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text =
-                        if (responseText.startsWith("Plan generated only")) {
-                            "Plan ready (execution unavailable)"
-                        } else {
-                            "Task completed"
-                        }
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = responseText
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = uiStatus
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = uiOutput
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
@@ -577,6 +611,120 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = e.message ?: "Unknown error"
                 }
             }
+        }
+    }
+
+    private data class PlanExecutionSummary(
+        val executed: Int,
+        val skipped: Int,
+        val failed: Int,
+        val notes: String
+    )
+
+    private fun executePlanLocally(planArray: org.json.JSONArray?): PlanExecutionSummary? {
+        if (planArray == null || planArray.length() == 0) return null
+
+        var executed = 0
+        var skipped = 0
+        var failed = 0
+        val notes = mutableListOf<String>()
+
+        for (i in 0 until planArray.length()) {
+            val rawStep = planArray.opt(i)
+            val stepJson = when (rawStep) {
+                is JSONObject -> rawStep
+                is String -> {
+                    val parsed = JSONObject()
+                    parsed.put("action", rawStep)
+                    parsed
+                }
+                else -> null
+            }
+
+            if (stepJson == null) {
+                skipped++
+                notes.add("Step ${i + 1}: unsupported step format")
+                continue
+            }
+
+            val didRun = runCatching { executeSinglePlanStep(stepJson) }.getOrElse {
+                failed++
+                notes.add("Step ${i + 1}: failed (${it.message ?: "unknown error"})")
+                false
+            }
+
+            if (didRun) {
+                executed++
+            } else {
+                skipped++
+                notes.add("Step ${i + 1}: no matching local action")
+            }
+        }
+
+        return PlanExecutionSummary(
+            executed = executed,
+            skipped = skipped,
+            failed = failed,
+            notes = notes.joinToString("\n")
+        )
+    }
+
+    private fun executeSinglePlanStep(step: JSONObject): Boolean {
+        val actionRaw = when {
+            step.has("action") -> step.optString("action")
+            step.has("type") -> step.optString("type")
+            step.has("tool") -> step.optString("tool")
+            else -> ""
+        }.lowercase().trim()
+
+        val targetRaw = step.optString("target", "").lowercase().trim()
+        val description = step.optString("description", "").lowercase().trim()
+
+        return when {
+            actionRaw.contains("scanner") || targetRaw.contains("scanner") || description.contains("scan") -> {
+                if (!isScannerActive) {
+                    handleScanner()
+                }
+                true
+            }
+            actionRaw.contains("keyboard") || targetRaw.contains("keyboard") || description.contains("keyboard") -> {
+                handleKeyboard()
+                true
+            }
+            actionRaw.contains("settings") || targetRaw.contains("settings") -> {
+                handleSettings()
+                true
+            }
+            actionRaw.contains("chat") || targetRaw.contains("chat") -> {
+                showFloatingChatbot()
+                true
+            }
+            actionRaw.contains("home") -> {
+                val intent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+                true
+            }
+            actionRaw.contains("open_app") || actionRaw.contains("launch") -> {
+                val packageName = when {
+                    step.has("package") -> step.optString("package")
+                    step.has("packageName") -> step.optString("packageName")
+                    else -> ""
+                }
+                if (packageName.isBlank()) return false
+
+                val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(launchIntent)
+                    true
+                } else {
+                    false
+                }
+            }
+            else -> false
         }
     }
 
