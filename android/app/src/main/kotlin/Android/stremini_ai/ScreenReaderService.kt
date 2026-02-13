@@ -33,15 +33,22 @@ class ScreenReaderService : AccessibilityService() {
         const val ACTION_SCAN_COMPLETE = "Android.stremini_ai.SCAN_COMPLETE"
         const val EXTRA_SCANNED_TEXT = "scanned_text"
         private const val TAG = "ScreenReaderService"
+        
         private var instance: ScreenReaderService? = null
         fun isRunning(): Boolean = instance != null
         fun isScanningActive(): Boolean = instance?.isScanning == true
         
-        // Colors
-        private val DANGER_COLOR = Color.parseColor("#ea4335") // Google Red
-        private val SUSPICIOUS_COLOR = Color.parseColor("#FBBC04") // Google Yellow/Orange
-        private val SAFE_COLOR = Color.parseColor("#1e8e3e")   // Google Green
-        private val BANNER_BG_COLOR = Color.parseColor("#34A853") // Green Banner
+        // --- THEME COLORS ---
+        // Safe Theme (Green)
+        private val SAFE_BG_COLOR = Color.parseColor("#1A3826")      // Dark Green Background
+        private val SAFE_BORDER_COLOR = Color.parseColor("#2D5C43")  // Lighter Green Border
+        private val SAFE_TEXT_COLOR = Color.parseColor("#6DD58C")    // Bright Green Text
+        
+        // Danger Theme (Brown/Red)
+        private val DANGER_BG_COLOR = Color.parseColor("#38261A")    // Dark Brown/Red Background
+        private val DANGER_BORDER_COLOR = Color.parseColor("#5C432D") // Lighter Brown Border
+        private val DANGER_TEXT_COLOR = Color.parseColor("#FFD580")  // Orange/Gold Text
+        private val ERROR_RED = Color.parseColor("#FF8080")          // Bright Red for critical icons
     }
 
     private lateinit var windowManager: WindowManager
@@ -85,7 +92,10 @@ class ScreenReaderService : AccessibilityService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START_SCAN -> if (tagsVisible) clearTags() else if (!isScanning) startScreenScan()
+            ACTION_START_SCAN -> {
+                if (tagsVisible) clearTags()
+                if (!isScanning) startScreenScan()
+            }
             ACTION_STOP_SCAN -> clearAllOverlays()
         }
         return START_NOT_STICKY
@@ -97,20 +107,30 @@ class ScreenReaderService : AccessibilityService() {
 
         serviceScope.launch {
             try {
+                // Wait for overlay to appear / app switching
                 delay(800) 
-                val rootNode = rootInActiveWindow ?: return@launch
+                
+                val rootNode = rootInActiveWindow
+                if (rootNode == null) {
+                    hideScanningAnimation()
+                    isScanning = false
+                    return@launch
+                }
+
                 val contentList = mutableListOf<ContentWithPosition>()
                 extractContentWithPositions(rootNode, contentList)
                 rootNode.recycle()
 
                 val fullText = contentList.joinToString("\n") { it.text }
-                // MOCKED ANALYSIS (For immediate UI verification)
-                // In production, this would call analyzeScreenContent(fullText)
-                val result = performLocalAnalysis(fullText, contentList) 
                 
+                // 1. ANALYZE (API Call with Fallback)
+                val result = analyzeScreenContent(fullText)
+                
+                // 2. DISPLAY RESULTS
                 hideScanningAnimation()
                 displayTagsForAllThreats(contentList, result)
 
+                // 3. BROADCAST TO FLUTTER
                 val broadcastIntent = Intent(ACTION_SCAN_COMPLETE).apply {
                     setPackage(packageName)
                     putExtra(EXTRA_SCANNED_TEXT, fullText)
@@ -127,25 +147,32 @@ class ScreenReaderService : AccessibilityService() {
         }
     }
     
-    // Simple local analysis to ensure UI connects for testing. 
-    // Replaces network call to avoid failures if backend isn't perfect yet.
-    private fun performLocalAnalysis(text: String, content: List<ContentWithPosition>): ScanResult {
+    // Fallback analysis if API fails or for offline testing
+    private fun performLocalAnalysis(text: String): ScanResult {
         val lower = text.lowercase()
         val tags = mutableListOf<TaggedElement>()
         var isSafe = true
         
-        // Mock detection logic
-        if (lower.contains("pirate") || lower.contains("torrent") || lower.contains("crack")) {
-             isSafe = false
-             tags.add(TaggedElement("⚠️ SUSPICIOUS", SUSPICIOUS_COLOR, "Potential Piracy/Risk", null))
+        // Simple keywords for demonstration
+        val threats = listOf("scam", "winner", "prize", "urgent", "password", "bank", "verify", "pirate", "crack")
+        
+        threats.forEach { threat ->
+            if (lower.contains(threat)) {
+                isSafe = false
+                tags.add(TaggedElement(
+                    label = "Suspicious Keyword", 
+                    color = DANGER_TEXT_COLOR, 
+                    reason = threat, 
+                    url = null, 
+                    message = threat
+                ))
+            }
         }
         
-        // If "Google" or "Safe" is widely present, we might say safe, but let's default to safe unless keywords found
-        return ScanResult(isSafe, if(isSafe) "safe" else "suspicious", "Scan Complete", tags)
+        return ScanResult(isSafe, if(isSafe) "safe" else "warning", "Analysis Complete", tags)
     }
 
     private suspend fun analyzeScreenContent(content: String): ScanResult = withContext(Dispatchers.IO) {
-<<<<<<< HEAD:android/app/src/main/kotlin/com/example/stremini_chatbot/ScreenReaderService.kt
         try {
             val requestBody = JSONObject().apply {
                 put("content", content.take(5000))
@@ -157,6 +184,11 @@ class ScreenReaderService : AccessibilityService() {
                 .build()
 
             val response = client.newCall(request).execute()
+            
+            if (!response.isSuccessful) {
+                 return@withContext performLocalAnalysis(content)
+            }
+
             val responseData = response.body?.string() ?: ""
             val json = JSONObject(responseData)
 
@@ -165,18 +197,16 @@ class ScreenReaderService : AccessibilityService() {
             if (taggedArray != null) {
                 for (i in 0 until taggedArray.length()) {
                     val item = taggedArray.getJSONObject(i)
-                    val securityTag = item.getJSONObject("securityTag")
-                    val details = item.getJSONObject("details")
                     
-                    val colorStr = securityTag.optString("color", "#dc2626")
-                    val color = try { Color.parseColor(colorStr) } catch (e: Exception) { Color.RED }
-
+                    val label = item.optString("label", "Threat Detected")
+                    val matchedText = item.optString("matchedText", "Suspicious Content")
+                    
                     tags.add(TaggedElement(
-                        label = securityTag.optString("label", "ALERT"),
-                        color = color,
-                        reason = details.optString("reason", "Suspicious content"),
-                        url = details.optString("url", null).takeIf { it != "null" },
-                        message = details.optString("message", null).takeIf { it != "null" }
+                        label = label,
+                        color = DANGER_TEXT_COLOR,
+                        reason = matchedText,
+                        url = null,
+                        message = matchedText
                     ))
                 }
             }
@@ -189,14 +219,8 @@ class ScreenReaderService : AccessibilityService() {
             )
         } catch (e: Exception) {
             Log.e(TAG, "Analysis error", e)
-            ScanResult(true, "safe", "✓ No threats detected", emptyList())
+            performLocalAnalysis(content)
         }
-=======
-         // ... (Original Code kept if we want to revert to real backend)
-         // For now using local analysis to guarantee UI appears for user testing
-         // Placeholder to satisfy signature if we swapped back
-         return@withContext performLocalAnalysis(content, emptyList())
->>>>>>> keyboard-ui:android/app/src/main/kotlin/Android/stremini_ai/ScreenReaderService.kt
     }
 
     // ==========================================
@@ -205,7 +229,7 @@ class ScreenReaderService : AccessibilityService() {
     private fun displayTagsForAllThreats(contentList: List<ContentWithPosition>, result: ScanResult) {
         clearTags()
         
-        // 1. Setup Full Screen Container (Absolute Positioning)
+        // 1. Setup Full Screen Container
         tagsContainer = FrameLayout(this)
         val containerParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -222,191 +246,56 @@ class ScreenReaderService : AccessibilityService() {
         containerParams.y = 0
         windowManager.addView(tagsContainer, containerParams)
 
-        // 2. Banner Logic (Updated Style)
-        createBanner(
-            title = if (result.isSafe) "✓ No threats detected - Screen appears safe" else "⚠️ Threats Detected",
-            color = if (result.isSafe) BANNER_BG_COLOR else DANGER_COLOR
-        )
+        // 2. Banner Logic
+        val bannerTitle = if (result.isSafe) "Safe: No Threat Detected" else "Warning: Potential Threats"
+        val bannerBg = if (result.isSafe) SAFE_BG_COLOR else DANGER_BG_COLOR
+        val bannerBorder = if (result.isSafe) SAFE_BORDER_COLOR else DANGER_BORDER_COLOR
+        val bannerText = if (result.isSafe) SAFE_TEXT_COLOR else DANGER_TEXT_COLOR
+        
+        createBanner(bannerTitle, bannerBg, bannerBorder, bannerText)
 
-<<<<<<< HEAD:android/app/src/main/kotlin/com/example/stremini_chatbot/ScreenReaderService.kt
-        if (result.isSafe) {
-            bannerText = "Safe: No Threat Detected"
-            bannerDetail = "Scam Detection Active"
-            bannerColor = SAFE_COLOR
-        } else {
-            if (linkThreats > 0) {
-                bannerText = "Suspicious Links: Threat Detected"
-                bannerDetail = "⚠️ $linkThreats threat(s) found - Be careful"
-                bannerColor = DANGER_COLOR
-            } else {
-                bannerText = "⚠️ DANGER: SCAM MESSAGE"
-                bannerDetail = "Do not reply or send money."
-                bannerColor = DANGER_COLOR
-            }
-        }
-
-        createBanner(bannerText, bannerColor, bannerDetail, result.isSafe)
-
-        val threatTags = result.taggedElements.filterNot { it.label.contains("safe", ignoreCase = true) }
-
-        // 3. Tag Logic (STRICT POSITIONING)
+        // 3. Tag Logic
         if (!result.isSafe) {
-            val remainingNodes = contentList.toMutableList()
-
-            threatTags.forEach { tag ->
-                val matchedContent = if (!tag.url.isNullOrBlank()) {
-                    findBestUrlNode(tag.url, remainingNodes)
-                        ?: fallbackNodeForTag(tag, remainingNodes)
-                } else {
-                    findBestMessageNode(tag, remainingNodes)
-                        ?: fallbackNodeForTag(tag, remainingNodes)
+            result.taggedElements.forEach { tag ->
+                // Basic matching: find screen element containing the threat text
+                val keyword = tag.reason.lowercase()
+                val match = contentList.find { content -> 
+                    content.text.lowercase().contains(keyword) 
                 }
 
-                if (matchedContent != null) {
-                    val labelText = if (!tag.url.isNullOrBlank()) {
-                        "Danger: Threat Detected"
-                    } else {
-                        "Scam Message: Threat"
-                    }
-                    createFloatingTag(matchedContent.bounds, labelText, DANGER_COLOR)
-                    remainingNodes.remove(matchedContent)
+                if (match != null) {
+                    createFloatingTag(match.bounds, tag.label, DANGER_BG_COLOR, DANGER_BORDER_COLOR, DANGER_TEXT_COLOR)
                 }
             }
-        }
-    }
-
-    private fun normalizeUrl(input: String): String {
-        return try {
-            val prefixed = if (input.startsWith("http", ignoreCase = true)) input else "https://$input"
-            val uri = URI(prefixed)
-            val host = uri.host?.lowercase()?.let { IDN.toUnicode(it) } ?: ""
-            val path = uri.path?.trimEnd('/') ?: ""
-            val normalizedHost = host.removePrefix("www.")
-            "$normalizedHost$path"
-        } catch (_: Exception) {
-            input.lowercase()
-                .removePrefix("http://")
-                .removePrefix("https://")
-                .removePrefix("www.")
-                .trimEnd('/')
-=======
-        // 3. Tag Logic (Updated Style)
-        if (!result.isSafe) {
-            val taggedPositions = mutableListOf<Pair<Int, Int>>()
-            
-            // Heuristic matching: Try to match keywords to screen bounds
-             result.taggedElements.forEach { tag ->
-                 val keywords = tag.reason.lowercase().split(" ").filter { it.length > 3 }
-                 val match = contentList.find { content -> 
-                     keywords.any { k -> content.text.lowercase().contains(k) }
-                 }
-                 
-                 if (match != null) {
-                      createFloatingTag(match.bounds, tag.label, tag.color)
-                 } else {
-                     // Fallback: If generic threat, maybe tag the center items or top item?
-                     // For now, if no specific match, we rely on Banner.
-                     // But for user demo "Pirate Bay", let's tag the title "The Pirate Bay"
-                     val titleMatch = contentList.find { it.text.contains("Pirate Bay", ignoreCase = true) }
-                     if (titleMatch != null) {
-                          createFloatingTag(titleMatch.bounds, "⚠️ SUSPICIOUS", SUSPICIOUS_COLOR)
-                     }
-                 }
-             }
         } else {
-             // EVEN IF SAFE, demonstrate "Verified Safe" tags for search results (User's image has green tags)
-             // Let's tag "wikipedia.org" matches as safe if present
-             contentList.filter { it.text.contains("wikipedia.org") || it.text.contains("google.com") }.forEach {
-                 createFloatingTag(it.bounds, "✓ Safe: No Threat Detected", SAFE_COLOR)
-             }
->>>>>>> keyboard-ui:android/app/src/main/kotlin/Android/stremini_ai/ScreenReaderService.kt
-        }
-    }
-
-    private fun scoreUrlMatch(tagUrl: String, content: ContentWithPosition): Int {
-        val nodeText = content.text.lowercase()
-        val normalizedTag = normalizeUrl(tagUrl)
-        val normalizedNode = normalizeUrl(nodeText)
-        val tagHost = normalizedTag.substringBefore('/')
-
-        var score = 0
-        if (normalizedNode.contains(normalizedTag)) score += 90
-        if (normalizedTag.contains(normalizedNode) && normalizedNode.length > 5) score += 70
-        if (tagHost.isNotBlank() && normalizedNode.contains(tagHost)) score += 55
-        if (content.isUrl) score += 20
-        if (nodeText.length in 8..200) score += 10
-        return score
-    }
-
-    private fun findBestUrlNode(tagUrl: String, contentList: List<ContentWithPosition>): ContentWithPosition? {
-        return contentList
-            .map { it to scoreUrlMatch(tagUrl, it) }
-            .filter { it.second > 0 }
-            .maxByOrNull { it.second }
-            ?.first
-    }
-
-    private fun findBestMessageNode(tag: TaggedElement, contentList: List<ContentWithPosition>): ContentWithPosition? {
-        val sourceText = listOfNotNull(tag.message, tag.reason)
-            .joinToString(" ")
-            .lowercase()
-        val keywords = sourceText
-            .split(Regex("[^a-z0-9]+"))
-            .filter { it.length > 3 }
-            .distinct()
-
-        return contentList
-            .map { content ->
-                val text = content.text.lowercase()
-                var score = 0
-
-                keywords.forEach { keyword ->
-                    if (text.contains(keyword)) score += 12
-                }
-                if (!tag.message.isNullOrBlank() && text.contains(tag.message.lowercase())) score += 70
-                if (content.isUrl) score -= 15
-                if (text.length in 8..280) score += 8
-
-                content to score
+            // Optional: Tag known safe elements to reassure user
+            contentList.filter { it.text.contains("google", ignoreCase = true) || it.text.contains("wikipedia", ignoreCase = true) }.forEach {
+                createFloatingTag(it.bounds, "Verified Safe", SAFE_BG_COLOR, SAFE_BORDER_COLOR, SAFE_TEXT_COLOR)
             }
-            .filter { it.second > 0 }
-            .maxByOrNull { it.second }
-            ?.first
-    }
-
-
-    private fun fallbackNodeForTag(tag: TaggedElement, contentList: List<ContentWithPosition>): ContentWithPosition? {
-        if (contentList.isEmpty()) return null
-
-        val preferredPool = if (!tag.url.isNullOrBlank()) {
-            contentList.filter { it.isUrl }
-        } else {
-            contentList.filterNot { it.isUrl }
         }
-
-        val pool = if (preferredPool.isNotEmpty()) preferredPool else contentList
-        return pool.minByOrNull { it.bounds.top }
     }
 
     // ==========================================
     // UI COMPONENTS
     // ==========================================
 
-    private fun createBanner(title: String, color: Int) {
+    private fun createBanner(title: String, bgColor: Int, borderColor: Int, textColor: Int) {
         val context = this
         val bannerLayout = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dpToPx(16), dpToPx(12), dpToPx(16), dpToPx(12))
+            
             background = GradientDrawable().apply {
-                setColor(color) 
+                setColor(bgColor) 
+                setStroke(dpToPx(2), borderColor)
                 cornerRadius = dpToPx(24).toFloat()
             }
             elevation = 10f
         }
 
         val iconView = TextView(context).apply {
-            text = "🛡️" // Unicode shield
+            text = if(title.contains("Safe")) "🛡️" else "⚠️"
             textSize = 18f
             setPadding(0, 0, dpToPx(8), 0)
             setTextColor(Color.WHITE)
@@ -419,17 +308,17 @@ class ScreenReaderService : AccessibilityService() {
             setTypeface(Typeface.DEFAULT_BOLD)
         }
         
-        val learnMore = TextView(context).apply {
-            text = "Learn More >"
-            setTextColor(Color.WHITE)
+        val statusView = TextView(context).apply {
+            text = if(title.contains("Safe")) "SECURE" else "RISK"
+            setTextColor(textColor)
             textSize = 12f
-            setPadding(dpToPx(12), 0, 0, 0)
-            alpha = 0.8f
+            setPadding(dpToPx(10), 0, 0, 0)
+            setTypeface(Typeface.DEFAULT_BOLD)
         }
-
+        
         bannerLayout.addView(iconView)
         bannerLayout.addView(titleView)
-        bannerLayout.addView(learnMore)
+        bannerLayout.addView(statusView)
 
         val params = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -442,7 +331,7 @@ class ScreenReaderService : AccessibilityService() {
         tagsContainer?.addView(bannerLayout, params)
     }
 
-    private fun createFloatingTag(bounds: Rect, labelText: String, color: Int) {
+    private fun createFloatingTag(bounds: Rect, labelText: String, bgColor: Int, borderColor: Int, textColor: Int) {
         val context = this
         
         val pill = LinearLayout(context).apply {
@@ -450,17 +339,16 @@ class ScreenReaderService : AccessibilityService() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
             background = GradientDrawable().apply {
-                setColor(color)
-                cornerRadius = dpToPx(20).toFloat() // Full pill shape
-                setStroke(2, Color.WHITE) // White border pop
+                setColor(bgColor)
+                cornerRadius = dpToPx(20).toFloat()
+                setStroke(dpToPx(1), borderColor)
             }
             elevation = 15f
         }
         
         val icon = TextView(context).apply {
-            text = "✓" // Default check
-            if (color == DANGER_COLOR || color == SUSPICIOUS_COLOR) text = "!"
-            setTextColor(Color.WHITE)
+            text = if (bgColor == SAFE_BG_COLOR) "✓" else "!"
+            setTextColor(textColor)
             textSize = 12f
             setTypeface(null, Typeface.BOLD)
             setPadding(0, 0, dpToPx(6), 0)
@@ -468,7 +356,7 @@ class ScreenReaderService : AccessibilityService() {
 
         val label = TextView(context).apply {
             text = labelText
-            setTextColor(Color.WHITE)
+            setTextColor(textColor)
             textSize = 12f
             setTypeface(Typeface.DEFAULT_BOLD)
             maxLines = 1
@@ -481,31 +369,12 @@ class ScreenReaderService : AccessibilityService() {
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-<<<<<<< HEAD:android/app/src/main/kotlin/com/example/stremini_chatbot/ScreenReaderService.kt
-            // STRICT ABSOLUTE POSITIONING
             gravity = Gravity.TOP or Gravity.START
             
-            // X Position
-            leftMargin = bounds.left.coerceAtLeast(12)
-            
-            // Y Position logic
-            val tagVerticalGap = 12
-            val estimatedTagHeight = 52
-            val topSafeArea = 190 // keep banner region readable
-
-            val preferredTop = bounds.top - estimatedTagHeight - tagVerticalGap
-            topMargin = if (preferredTop >= topSafeArea) {
-                preferredTop
-            } else {
-                (bounds.bottom + tagVerticalGap).coerceAtLeast(topSafeArea)
-            }
-=======
-            gravity = Gravity.TOP or Gravity.LEFT
-            
-            // POSITIONING LOGIC: Overlap Top-Left
+            // Positioning Logic
             leftMargin = bounds.left.coerceAtLeast(10)
-            topMargin = (bounds.top - dpToPx(15)).coerceAtLeast(dpToPx(80)) // Float slightly above/on-top
->>>>>>> keyboard-ui:android/app/src/main/kotlin/Android/stremini_ai/ScreenReaderService.kt
+            // Position above the element, but ensure it doesn't overlap the top banner area
+            topMargin = (bounds.top - dpToPx(35)).coerceAtLeast(dpToPx(90))
         }
         
         tagsContainer?.addView(pill, params)
@@ -533,20 +402,10 @@ class ScreenReaderService : AccessibilityService() {
         try {
             val scanView = FrameLayout(this).apply {
                 background = GradientDrawable().apply {
-                    setColor(Color.parseColor("#40000000")) // Dim background
+                    setColor(Color.parseColor("#60000000")) // Dim background
                 }
             }
-             val params = WindowManager.LayoutParams(
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.MATCH_PARENT,
-                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or 
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                PixelFormat.TRANSLUCENT
-            )
             
-            // Simple text loading
             val loadingText = TextView(this).apply {
                  text = "Scanning..."
                  setTextColor(Color.WHITE)
@@ -555,6 +414,16 @@ class ScreenReaderService : AccessibilityService() {
             }
             val textParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply { gravity = Gravity.CENTER }
             scanView.addView(loadingText, textParams)
+            
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or 
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+            )
             
             windowManager.addView(scanView, params)
             scanningOverlay = scanView
@@ -591,4 +460,4 @@ class ScreenReaderService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
-} 
+}
