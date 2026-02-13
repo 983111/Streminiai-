@@ -544,8 +544,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     .build()
 
                 val response = client.newCall(request).execute()
-                val uiStatus: String
-                val uiOutput: String
+                var uiStatus: String
+                var uiOutput: String
 
                 if (response.isSuccessful) {
                     val raw = response.body?.string().orEmpty()
