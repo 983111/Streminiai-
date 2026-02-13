@@ -531,6 +531,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     put("query", command)
                     put("instruction", command)
                     put("ui_context", JSONObject())
+                    // Request real execution instead of plan-only previews.
+                    put("execute", true)
+                    put("dryRun", false)
+                    put("autoExecute", true)
                 }
                 val body = payload.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder()
@@ -540,33 +544,300 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     .build()
 
                 val response = client.newCall(request).execute()
-                val responseText = if (response.isSuccessful) {
+                val (uiStatus, uiOutput) = if (response.isSuccessful) {
                     val raw = response.body?.string().orEmpty()
                     try {
                         val json = JSONObject(raw)
                         when {
-                            json.has("summary") -> json.optString("summary") + "\n\n" + json.toString(2)
-                            json.has("plan") -> "Plan ready\n\n" + json.optJSONArray("plan").toString()
-                            else -> json.toString(2)
+                            json.has("execution_result") || json.has("result") -> {
+                                val resultValue = if (json.has("execution_result")) json.opt("execution_result") else json.opt("result")
+                                "Task completed" to "Task executed\n\n$resultValue"
+                            }
+                            json.has("plan") -> {
+                                val localExecutionSummary = executePlanLocally(json.optJSONArray("plan"))
+                                if (localExecutionSummary != null && localExecutionSummary.executed > 0) {
+                                    val status = if (localExecutionSummary.failed > 0) {
+                                        "Task partially completed"
+                                    } else {
+                                        "Task completed"
+                                    }
+                                    val output = buildString {
+                                        append("Plan received and executed on device\n")
+                                        append("Executed: ${localExecutionSummary.executed}")
+                                        append(" | Skipped: ${localExecutionSummary.skipped}")
+                                        append(" | Failed: ${localExecutionSummary.failed}\n\n")
+                                        if (localExecutionSummary.notes.isNotBlank()) {
+                                            append(localExecutionSummary.notes)
+                                            append("\n\n")
+                                        }
+                                        append("Original plan:\n")
+                                        append(json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                    }
+                                    status to output
+                                } else {
+                                    "Plan ready (execution unavailable)" to (
+                                        "Plan generated only\n\n" + (json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                    )
+                                }
+                            }
+                            json.has("summary") -> {
+                                "Task response received" to (json.optString("summary") + "\n\n" + json.toString(2))
+                            }
+                            else -> {
+                                "Task response received" to json.toString(2)
+                            }
                         }
                     } catch (_: Exception) {
-                        raw
+                        "Task response received" to raw
                     }
                 } else {
-                    "Server error: ${response.code}"
+                    "Failed to execute task" to "Server error: ${response.code}"
+                }
+
+                val directCommandRan = executeDirectVoiceCommand(command)
+                val finalStatus = if (directCommandRan && uiStatus.contains("response", ignoreCase = true)) {
+                    "Task completed"
+                } else {
+                    uiStatus
+                }
+                val finalOutput = if (directCommandRan && uiOutput.isNotBlank()) {
+                    "Direct device automation executed.\n\n$uiOutput"
+                } else if (directCommandRan) {
+                    "Direct device automation executed."
+                } else {
+                    uiOutput
                 }
 
                 withContext(Dispatchers.Main) {
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Task plan ready"
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = responseText
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = finalStatus
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = finalOutput
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Failed to reach task planner"
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Failed to execute task"
                     autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = e.message ?: "Unknown error"
                 }
             }
         }
+    }
+
+    private data class PlanExecutionSummary(
+        val executed: Int,
+        val skipped: Int,
+        val failed: Int,
+        val notes: String
+    )
+
+    private fun executePlanLocally(planArray: org.json.JSONArray?): PlanExecutionSummary? {
+        if (planArray == null || planArray.length() == 0) return null
+
+        var executed = 0
+        var skipped = 0
+        var failed = 0
+        val notes = mutableListOf<String>()
+
+        for (i in 0 until planArray.length()) {
+            val rawStep = planArray.opt(i)
+            val stepJson = when (rawStep) {
+                is JSONObject -> rawStep
+                is String -> {
+                    val parsed = JSONObject()
+                    parsed.put("action", rawStep)
+                    parsed
+                }
+                else -> null
+            }
+
+            if (stepJson == null) {
+                skipped++
+                notes.add("Step ${i + 1}: unsupported step format")
+                continue
+            }
+
+            val didRun = runCatching { executeSinglePlanStep(stepJson) }.getOrElse {
+                failed++
+                notes.add("Step ${i + 1}: failed (${it.message ?: "unknown error"})")
+                false
+            }
+
+            if (didRun) {
+                executed++
+            } else {
+                skipped++
+                notes.add("Step ${i + 1}: no matching local action")
+            }
+        }
+
+        return PlanExecutionSummary(
+            executed = executed,
+            skipped = skipped,
+            failed = failed,
+            notes = notes.joinToString("\n")
+        )
+    }
+
+    private fun executeSinglePlanStep(step: JSONObject): Boolean {
+        val actionRaw = when {
+            step.has("action") -> step.optString("action")
+            step.has("type") -> step.optString("type")
+            step.has("tool") -> step.optString("tool")
+            else -> ""
+        }.lowercase().trim()
+
+        val targetRaw = step.optString("target", "").lowercase().trim()
+        val description = step.optString("description", "").lowercase().trim()
+        val messageText = when {
+            step.has("message") -> step.optString("message")
+            step.has("text") -> step.optString("text")
+            else -> ""
+        }
+        val contactName = when {
+            step.has("contact") -> step.optString("contact")
+            step.has("recipient") -> step.optString("recipient")
+            step.has("name") -> step.optString("name")
+            else -> ""
+        }
+        val combinedText = listOf(actionRaw, targetRaw, description, messageText.lowercase(), contactName.lowercase())
+            .joinToString(" ")
+
+        return when {
+            combinedText.contains("whatsapp") && combinedText.contains("message") -> {
+                val (parsedContact, parsedMessage) = extractWhatsAppIntentFromStep(step)
+                if (parsedContact.isBlank()) return false
+
+                val finalMessage = if (parsedMessage.isBlank()) {
+                    "Hey ${parsedContact}, this is an automated message."
+                } else {
+                    parsedMessage
+                }
+
+                ScreenReaderService.runWhatsAppMessageAutomation(parsedContact, finalMessage)
+            }
+            actionRaw.contains("scanner") || targetRaw.contains("scanner") || description.contains("scan") -> {
+                if (!isScannerActive) {
+                    handleScanner()
+                }
+                true
+            }
+            actionRaw.contains("keyboard") || targetRaw.contains("keyboard") || description.contains("keyboard") -> {
+                handleKeyboard()
+                true
+            }
+            actionRaw.contains("settings") || targetRaw.contains("settings") -> {
+                handleSettings()
+                true
+            }
+            actionRaw.contains("chat") || targetRaw.contains("chat") -> {
+                showFloatingChatbot()
+                true
+            }
+            actionRaw.contains("home") -> {
+                val intent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+                true
+            }
+            actionRaw.contains("open_app") || actionRaw.contains("launch") -> {
+                val packageName = when {
+                    step.has("package") -> step.optString("package")
+                    step.has("packageName") -> step.optString("packageName")
+                    else -> ""
+                }
+                if (packageName.isBlank()) return false
+
+                val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(launchIntent)
+                    true
+                } else {
+                    false
+                }
+            }
+            else -> false
+        }
+    }
+
+    private fun executeDirectVoiceCommand(command: String): Boolean {
+        val normalized = command.trim().lowercase()
+        if (normalized.isBlank()) return false
+
+        if (normalized.contains("whatsapp") && normalized.contains("message")) {
+            val contact = Regex("message\\s+([a-zA-Z0-9 _.-]+?)(?:\\s+that|\\s+saying|\\s+to\\s+say|$)")
+                .find(normalized)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                .orEmpty()
+
+            val message = Regex("(?:that|saying|to say)\\s+(.+)$", RegexOption.IGNORE_CASE)
+                .find(command)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                .orEmpty()
+
+            if (contact.isNotBlank()) {
+                return ScreenReaderService.runWhatsAppMessageAutomation(
+                    contactName = contact,
+                    message = if (message.isBlank()) "Hey $contact" else message
+                )
+            }
+        }
+
+        if (normalized.contains("open whatsapp")) {
+            val launchIntent = packageManager.getLaunchIntentForPackage("com.whatsapp") ?: return false
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(launchIntent)
+            return true
+        }
+
+        // Fallback: ask accessibility automation layer to execute broader commands.
+        return ScreenReaderService.runGenericAutomation(command)
+    }
+
+    private fun extractWhatsAppIntentFromStep(step: JSONObject): Pair<String, String> {
+        val directContact = when {
+            step.has("contact") -> step.optString("contact")
+            step.has("recipient") -> step.optString("recipient")
+            step.has("name") -> step.optString("name")
+            else -> ""
+        }.trim()
+
+        val directMessage = when {
+            step.has("message") -> step.optString("message")
+            step.has("text") -> step.optString("text")
+            else -> ""
+        }.trim()
+
+        if (directContact.isNotBlank()) {
+            return directContact to directMessage
+        }
+
+        val source = listOf(
+            step.optString("action", ""),
+            step.optString("description", ""),
+            step.optString("instruction", "")
+        ).joinToString(" ").trim()
+
+        val normalized = source.lowercase()
+        val contact = Regex("message\\s+([a-zA-Z0-9 _.-]+?)(?:\\s+that|\\s+saying|\\s+to\\s+say|$)")
+            .find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: ""
+
+        val message = Regex("(?:that|saying|to say)\\s+(.+)$", RegexOption.IGNORE_CASE)
+            .find(source)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: ""
+
+        return contact to message
     }
 
     private fun hideFloatingChatbot() {
