@@ -11,8 +11,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -27,6 +32,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
@@ -72,7 +78,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var isScannerActive = false
     private lateinit var inputMethodManager: InputMethodManager
     
-    private lateinit var scannerChannel: android.view.inputmethod.InputMethodManager
+    private var autoTaskerView: View? = null
+    private var autoTaskerParams: WindowManager.LayoutParams? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var isAutoTaskerVisible = false
 
     private var initialX = 0
     private var initialY = 0
@@ -155,7 +164,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         bubbleIcon = overlayView.findViewById(R.id.bubble_icon)
 
         menuItems = listOf(
-            overlayView.findViewById(R.id.btn_refresh),
+            overlayView.findViewById(R.id.btn_auto_tasker),
             overlayView.findViewById(R.id.btn_settings),
             overlayView.findViewById(R.id.btn_ai),
             overlayView.findViewById(R.id.btn_scanner),
@@ -203,7 +212,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
         menuItems[0].setOnClickListener {
             collapseMenu()
-            handleRefresh()
+            handleAutoTasker()
         }
         menuItems[1].setOnClickListener {
             collapseMenu()
@@ -219,7 +228,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
         menuItems[4].setOnClickListener {
             collapseMenu()
-            handleVoiceCommand()
+            handleKeyboard()
         }
 
         bubbleIcon.setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -413,13 +422,173 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
     }
 
-    private fun hideFloatingChatbot() {
-        if (!isChatbotVisible) return
-        floatingChatView?.let { view ->
-            windowManager.removeView(view)
-            floatingChatView = null
-            floatingChatParams = null
-            isChatbotVisible = false
+
+    private fun showAutoTasker(): Boolean {
+        if (isAutoTaskerVisible) return true
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "Microphone permission is required. Opening app settings...", Toast.LENGTH_LONG).show()
+            try {
+                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+            } catch (_: Exception) {}
+            return false
+        }
+
+        autoTaskerView = LayoutInflater.from(this).inflate(R.layout.auto_tasker_overlay, null)
+        val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        autoTaskerParams = WindowManager.LayoutParams(
+            dpToPx(320f),
+            dpToPx(420f),
+            typeParam,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+
+        autoTaskerView?.findViewById<ImageView>(R.id.btn_close_tasker)?.setOnClickListener {
+            hideAutoTasker()
+            activeFeatures.remove(menuItems[0].id)
+            updateMenuItemsColor()
+        }
+
+        autoTaskerView?.findViewById<ImageView>(R.id.btn_start_listening)?.setOnClickListener {
+            startVoiceCapture()
+        }
+
+        windowManager.addView(autoTaskerView, autoTaskerParams)
+        isAutoTaskerVisible = true
+        startVoiceCapture()
+        return true
+    }
+
+    private fun hideAutoTasker() {
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+        autoTaskerView?.let { windowManager.removeView(it) }
+        autoTaskerView = null
+        autoTaskerParams = null
+        isAutoTaskerVisible = false
+    }
+
+    private fun startVoiceCapture() {
+        val view = autoTaskerView ?: return
+        val status = view.findViewById<TextView>(R.id.tv_tasker_status)
+        status.text = "Listening..."
+
+        speechRecognizer?.destroy()
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            status.text = "Speech recognition not available on this device"
+            return
+        }
+
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: android.os.Bundle?) { status.text = "Speak now..." }
+                override fun onBeginningOfSpeech() { status.text = "Listening..." }
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() { status.text = "Processing your command..." }
+                override fun onError(error: Int) { status.text = "Voice capture failed ($error). Please try again." }
+                override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+                override fun onPartialResults(partialResults: android.os.Bundle?) {}
+                override fun onResults(results: android.os.Bundle?) {
+                    val command = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
+                    if (command.isNullOrBlank()) {
+                        status.text = "Could not understand. Try again."
+                    } else {
+                        status.text = "Understood: $command"
+                        view.findViewById<TextView>(R.id.tv_tasker_output).text = "You said: $command\n\nPlanning actions..."
+                        sendVoiceTaskCommand(command)
+                    }
+                }
+            })
+        }
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        speechRecognizer?.startListening(intent)
+    }
+
+    private fun callTaskEndpoint(url: String, payload: JSONObject): Pair<Int, String> {
+        val body = payload.toString().toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url(url)
+            .post(body)
+            .build()
+        client.newCall(request).execute().use { response ->
+            return Pair(response.code, response.body?.string().orEmpty())
+        }
+    }
+
+    private fun sendVoiceTaskCommand(command: String) {
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().apply {
+                    put("command", command)
+                    put("query", command)
+                    put("instruction", command)
+                    put("ui_context", JSONObject())
+                }
+
+                val primaryUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/execute-task"
+                val fallbackUrl = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/voice-command"
+
+                var (statusCode, raw) = callTaskEndpoint(primaryUrl, payload)
+                var usedUrl = primaryUrl
+
+                if (statusCode == 404) {
+                    val fallbackPayload = JSONObject(payload.toString()).apply {
+                        put("text", command)
+                    }
+                    val fallbackResult = callTaskEndpoint(fallbackUrl, fallbackPayload)
+                    statusCode = fallbackResult.first
+                    raw = fallbackResult.second
+                    usedUrl = fallbackUrl
+                }
+
+                val responseText = if (statusCode in 200..299) {
+                    try {
+                        val json = JSONObject(raw)
+                        when {
+                            json.has("summary") -> json.optString("summary") + "\n\n" + json.toString(2)
+                            json.has("plan") -> "Plan ready\n\n" + json.optJSONArray("plan").toString()
+                            json.has("actions") -> "Actions generated\n\n" + json.optJSONArray("actions").toString()
+                            else -> json.toString(2)
+                        }
+                    } catch (_: Exception) {
+                        raw
+                    }
+                } else {
+                    "Request failed (${statusCode}) on ${usedUrl}.\n${raw}"
+                }
+
+                withContext(Dispatchers.Main) {
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = if (statusCode in 200..299) {
+                        "Task plan ready"
+                    } else {
+                        "Task generation failed"
+                    }
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = responseText
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Failed to reach task planner"
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = e.message ?: "Unknown error"
+                }
+            }
         }
     }
 
@@ -452,9 +621,9 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
     }
 
-    private fun handleVoiceCommand() {
+    private fun handleKeyboard() {
         toggleFeature(menuItems[4].id)
-        
+
         if (isFeatureActive(menuItems[4].id)) {
             try {
                 val intent = Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS)
@@ -479,20 +648,17 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         Toast.makeText(this, "Opening Stremini...", Toast.LENGTH_SHORT).show()
     }
 
-    private fun handleRefresh() {
-        activeFeatures.clear()
-        
-        if (isScannerActive) {
-            isScannerActive = false
-            val intent = Intent(this, ScreenReaderService::class.java)
-            intent.action = ScreenReaderService.ACTION_STOP_SCAN
-            startService(intent)
+    private fun handleAutoTasker() {
+        toggleFeature(menuItems[0].id)
+        if (isFeatureActive(menuItems[0].id)) {
+            val opened = showAutoTasker()
+            if (!opened) {
+                activeFeatures.remove(menuItems[0].id)
+                updateMenuItemsColor()
+            }
+        } else {
+            hideAutoTasker()
         }
-        
-        hideFloatingChatbot()
-        
-        updateMenuItemsColor()
-        Toast.makeText(this, "Refresh Complete - All features reset", Toast.LENGTH_SHORT).show()
     }
 
     private fun toggleFeature(featureId: Int) {
@@ -820,6 +986,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         serviceScope.cancel()
         unregisterReceiver(controlReceiver)
         hideFloatingChatbot()
+        hideAutoTasker()
         if (::overlayView.isInitialized && overlayView.windowToken != null) windowManager.removeView(overlayView)
     }
 }
