@@ -1,10 +1,6 @@
 # Stremini AI
 
-<<<<<<< HEAD
-**Package:** `com.example.Android.stremini_ai`
-=======
-**Package:** `Android.stremini_ai`
->>>>>>> keyboard-ui
+**Package:** `com.Android.stremini_ai`
 **Platform:** Android (Hybrid Flutter/Kotlin)
 **Backend:** Cloudflare Workers
 
