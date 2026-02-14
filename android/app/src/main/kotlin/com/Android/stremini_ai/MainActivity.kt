@@ -1,4 +1,4 @@
-package Android.stremini_ai
+package com.Android.stremini_ai
 
 import android.Manifest
 import android.content.BroadcastReceiver
@@ -56,7 +56,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         
         // Scanner method channel
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "Android.stremini_ai").setMethodCallHandler { call, result ->
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.Android.stremini_ai").setMethodCallHandler { call, result ->
             when (call.method) {
                 "startScanner" -> {
                     result.success(true)

@@ -1,4 +1,4 @@
-package Android.stremini_ai
+package com.Android.stremini_ai
 
 import android.content.Context
 import android.inputmethodservice.InputMethodService
