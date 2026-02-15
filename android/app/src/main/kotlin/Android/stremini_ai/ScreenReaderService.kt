@@ -137,7 +137,7 @@ class ScreenReaderService : AccessibilityService() {
         // Mock detection logic
         if (lower.contains("pirate") || lower.contains("torrent") || lower.contains("crack")) {
              isSafe = false
-             tags.add(TaggedElement("⚠️ SUSPICIOUS", SUSPICIOUS_COLOR, "Potential Piracy/Risk", null))
+             tags.add(TaggedElement("⚠️ SUSPICIOUS", SUSPICIOUS_COLOR, "Potential Piracy/Risk", null, "Suspicious content detected"))
         }
         
         // If "Google" or "Safe" is widely present, we might say safe, but let's default to safe unless keywords found
@@ -145,7 +145,6 @@ class ScreenReaderService : AccessibilityService() {
     }
 
     private suspend fun analyzeScreenContent(content: String): ScanResult = withContext(Dispatchers.IO) {
-<<<<<<< HEAD:android/app/src/main/kotlin/com/example/stremini_chatbot/ScreenReaderService.kt
         try {
             val requestBody = JSONObject().apply {
                 put("content", content.take(5000))
@@ -191,12 +190,6 @@ class ScreenReaderService : AccessibilityService() {
             Log.e(TAG, "Analysis error", e)
             ScanResult(true, "safe", "✓ No threats detected", emptyList())
         }
-=======
-         // ... (Original Code kept if we want to revert to real backend)
-         // For now using local analysis to guarantee UI appears for user testing
-         // Placeholder to satisfy signature if we swapped back
-         return@withContext performLocalAnalysis(content, emptyList())
->>>>>>> keyboard-ui:android/app/src/main/kotlin/Android/stremini_ai/ScreenReaderService.kt
     }
 
     // ==========================================
@@ -228,111 +221,46 @@ class ScreenReaderService : AccessibilityService() {
             color = if (result.isSafe) BANNER_BG_COLOR else DANGER_COLOR
         )
 
-<<<<<<< HEAD:android/app/src/main/kotlin/com/example/stremini_chatbot/ScreenReaderService.kt
-        if (result.isSafe) {
-            bannerText = "Safe: No Threat Detected"
-            bannerDetail = "Scam Detection Active"
-            bannerColor = SAFE_COLOR
-        } else {
-            if (linkThreats > 0) {
-                bannerText = "Suspicious Links: Threat Detected"
-                bannerDetail = "⚠️ $linkThreats threat(s) found - Be careful"
-                bannerColor = DANGER_COLOR
-            } else {
-                bannerText = "⚠️ DANGER: SCAM MESSAGE"
-                bannerDetail = "Do not reply or send money."
-                bannerColor = DANGER_COLOR
-            }
-        }
-
-        createBanner(bannerText, bannerColor, bannerDetail, result.isSafe)
-
-        val threatTags = result.taggedElements.filterNot { it.label.contains("safe", ignoreCase = true) }
-
-        // 3. Tag Logic (STRICT POSITIONING)
-        if (!result.isSafe) {
-            val remainingNodes = contentList.toMutableList()
-
-            threatTags.forEach { tag ->
-                val matchedContent = if (!tag.url.isNullOrBlank()) {
-                    findBestUrlNode(tag.url, remainingNodes)
-                        ?: fallbackNodeForTag(tag, remainingNodes)
-                } else {
-                    findBestMessageNode(tag, remainingNodes)
-                        ?: fallbackNodeForTag(tag, remainingNodes)
-                }
-
-                if (matchedContent != null) {
-                    val labelText = if (!tag.url.isNullOrBlank()) {
-                        "Danger: Threat Detected"
-                    } else {
-                        "Scam Message: Threat"
-                    }
-                    createFloatingTag(matchedContent.bounds, labelText, DANGER_COLOR)
-                    remainingNodes.remove(matchedContent)
-                }
-            }
-        }
-    }
-
-    private fun normalizeUrl(input: String): String {
-        return try {
-            val prefixed = if (input.startsWith("http", ignoreCase = true)) input else "https://$input"
-            val uri = URI(prefixed)
-            val host = uri.host?.lowercase()?.let { IDN.toUnicode(it) } ?: ""
-            val path = uri.path?.trimEnd('/') ?: ""
-            val normalizedHost = host.removePrefix("www.")
-            "$normalizedHost$path"
-        } catch (_: Exception) {
-            input.lowercase()
-                .removePrefix("http://")
-                .removePrefix("https://")
-                .removePrefix("www.")
-                .trimEnd('/')
-=======
         // 3. Tag Logic (Updated Style)
         if (!result.isSafe) {
-            val taggedPositions = mutableListOf<Pair<Int, Int>>()
-            
-            // Heuristic matching: Try to match keywords to screen bounds
-             result.taggedElements.forEach { tag ->
-                 val keywords = tag.reason.lowercase().split(" ").filter { it.length > 3 }
-                 val match = contentList.find { content -> 
-                     keywords.any { k -> content.text.lowercase().contains(k) }
-                 }
-                 
-                 if (match != null) {
-                      createFloatingTag(match.bounds, tag.label, tag.color)
-                 } else {
-                     // Fallback: If generic threat, maybe tag the center items or top item?
-                     // For now, if no specific match, we rely on Banner.
-                     // But for user demo "Pirate Bay", let's tag the title "The Pirate Bay"
-                     val titleMatch = contentList.find { it.text.contains("Pirate Bay", ignoreCase = true) }
-                     if (titleMatch != null) {
-                          createFloatingTag(titleMatch.bounds, "⚠️ SUSPICIOUS", SUSPICIOUS_COLOR)
-                     }
-                 }
-             }
+            result.taggedElements.forEach { tag ->
+                val keywords = tag.reason.lowercase().split(" ").filter { it.length > 3 }
+                val match = contentList.find { content -> 
+                    keywords.any { k -> content.text.lowercase().contains(k) }
+                }
+                
+                if (match != null) {
+                    createFloatingTag(match.bounds, tag.label, tag.color)
+                } else {
+                    // Fallback: If generic threat, tag any matching content
+                    val fallback = contentList.firstOrNull { it.text.isNotEmpty() }
+                    if (fallback != null) {
+                        createFloatingTag(fallback.bounds, tag.label, tag.color)
+                    }
+                }
+            }
         } else {
-             // EVEN IF SAFE, demonstrate "Verified Safe" tags for search results (User's image has green tags)
-             // Let's tag "wikipedia.org" matches as safe if present
-             contentList.filter { it.text.contains("wikipedia.org") || it.text.contains("google.com") }.forEach {
-                 createFloatingTag(it.bounds, "✓ Safe: No Threat Detected", SAFE_COLOR)
-             }
->>>>>>> keyboard-ui:android/app/src/main/kotlin/Android/stremini_ai/ScreenReaderService.kt
+            // Even if safe, demonstrate tags for known safe sites
+            contentList.filter { it.text.contains("wikipedia.org", ignoreCase = true) || 
+                                  it.text.contains("google.com", ignoreCase = true) }.forEach {
+                createFloatingTag(it.bounds, "✓ Safe: No Threat Detected", SAFE_COLOR)
+            }
         }
     }
 
     private fun scoreUrlMatch(tagUrl: String, content: ContentWithPosition): Int {
         val nodeText = content.text.lowercase()
-        val normalizedTag = normalizeUrl(tagUrl)
-        val normalizedNode = normalizeUrl(nodeText)
-        val tagHost = normalizedTag.substringBefore('/')
+        val tagHost = try {
+            val prefixed = if (tagUrl.startsWith("http", ignoreCase = true)) tagUrl else "https://$tagUrl"
+            URI(prefixed).host?.lowercase() ?: ""
+        } catch (_: Exception) {
+            tagUrl.lowercase()
+        }
 
         var score = 0
-        if (normalizedNode.contains(normalizedTag)) score += 90
-        if (normalizedTag.contains(normalizedNode) && normalizedNode.length > 5) score += 70
-        if (tagHost.isNotBlank() && normalizedNode.contains(tagHost)) score += 55
+        if (nodeText.contains(tagUrl.lowercase())) score += 90
+        if (tagUrl.lowercase().contains(nodeText) && nodeText.length > 5) score += 70
+        if (tagHost.isNotBlank() && nodeText.contains(tagHost)) score += 55
         if (content.isUrl) score += 20
         if (nodeText.length in 8..200) score += 10
         return score
@@ -481,8 +409,6 @@ class ScreenReaderService : AccessibilityService() {
             FrameLayout.LayoutParams.WRAP_CONTENT,
             FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-<<<<<<< HEAD:android/app/src/main/kotlin/com/example/stremini_chatbot/ScreenReaderService.kt
-            // STRICT ABSOLUTE POSITIONING
             gravity = Gravity.TOP or Gravity.START
             
             // X Position
@@ -499,13 +425,6 @@ class ScreenReaderService : AccessibilityService() {
             } else {
                 (bounds.bottom + tagVerticalGap).coerceAtLeast(topSafeArea)
             }
-=======
-            gravity = Gravity.TOP or Gravity.LEFT
-            
-            // POSITIONING LOGIC: Overlap Top-Left
-            leftMargin = bounds.left.coerceAtLeast(10)
-            topMargin = (bounds.top - dpToPx(15)).coerceAtLeast(dpToPx(80)) // Float slightly above/on-top
->>>>>>> keyboard-ui:android/app/src/main/kotlin/Android/stremini_ai/ScreenReaderService.kt
         }
         
         tagsContainer?.addView(pill, params)
@@ -589,6 +508,11 @@ class ScreenReaderService : AccessibilityService() {
         instance = null
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
-    override fun onInterrupt() {}
-} 
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // Handle accessibility events as needed
+    }
+
+    override fun onInterrupt() {
+        // Handle interrupt
+    }
+}

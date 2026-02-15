@@ -93,7 +93,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var isMenuAnimating = false
     private var windowAnimator: ValueAnimator? = null
     private var isWindowResizing = false
-    private var preventPositionUpdates = false  // NEW: Prevents position updates during resize
+    private var preventPositionUpdates = false
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -539,9 +539,21 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
     }
 
+    // FIXED: Sync bubble position with actual window position
+    private fun syncBubblePosition() {
+        val currentWindowHalfSize = params.width / 2
+        bubbleScreenX = params.x + currentWindowHalfSize
+        bubbleScreenY = params.y + currentWindowHalfSize
+    }
+
     override fun onTouch(v: View, event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                // CRITICAL: Sync position before starting any interaction
+                if (!isWindowResizing && !preventPositionUpdates) {
+                    syncBubblePosition()
+                }
+                
                 initialTouchX = event.rawX
                 initialTouchY = event.rawY
                 initialX = bubbleScreenX
@@ -594,12 +606,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 if (!hasMoved && !isDragging) {
                     if (!isMenuAnimating) toggleMenu()
                 } else if (isDragging) {
-                    // FIXED: Wait for resize to complete before snapping
-                    if (isWindowResizing || preventPositionUpdates) {
-                        overlayView.postDelayed({ snapToEdge() }, 200)
-                    } else {
-                        snapToEdge()
-                    }
+                    snapToEdge()
                 }
                 isDragging = false
                 hasMoved = false
@@ -615,9 +622,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
     private fun expandMenu() {
-        if (isMenuAnimating || isMenuExpanded) return
+        if (isMenuAnimating || isMenuExpanded || isWindowResizing) return
         isMenuExpanded = true
         isMenuAnimating = true
+        
+        // Sync position before expanding
+        syncBubblePosition()
 
         val radiusPx = dpToPx(radiusDp).toFloat()
         val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
@@ -672,9 +682,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
     private fun collapseMenu() {
-        if (isMenuAnimating || !isMenuExpanded) return
+        if (isMenuAnimating || !isMenuExpanded || isWindowResizing) return
         isMenuExpanded = false
         isMenuAnimating = true
+        
+        // Sync position before collapsing
+        syncBubblePosition()
 
         val radiusPx = dpToPx(radiusDp).toFloat()
         val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
@@ -703,27 +716,31 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private fun animateWindowSize(fromSize: Float, toSize: Float, duration: Long = 200L, onEnd: (() -> Unit)? = null) {
         windowAnimator?.cancel()
         isWindowResizing = true
-        preventPositionUpdates = true  // FIXED: Lock position updates during resize
+        preventPositionUpdates = true
 
+        // CRITICAL: Capture bubble position BEFORE animation starts
+        val capturedBubbleX = bubbleScreenX
+        val capturedBubbleY = bubbleScreenY
+        
         val fromHalf = fromSize / 2f
         val toHalf = toSize / 2f
-        val startX = bubbleScreenX - fromHalf
-        val endX = bubbleScreenX - toHalf
-        val startY = bubbleScreenY - fromHalf
-        val endY = bubbleScreenY - toHalf
+        val startX = capturedBubbleX - fromHalf
+        val endX = capturedBubbleX - toHalf
+        val startY = capturedBubbleY - fromHalf
+        val endY = capturedBubbleY - toHalf
 
-        windowAnimator = ValueAnimator.ofFloat(fromSize, toSize).apply {
+        windowAnimator = ValueAnimator.ofFloat(0f, 1f).apply {  // Changed to 0-1 fraction
             this.duration = duration
             interpolator = DecelerateInterpolator()
             
             addUpdateListener { animator ->
-                val newSize = animator.animatedValue as Float
-                val frac = if (toSize != fromSize) (newSize - fromSize) / (toSize - fromSize) else 1f
+                val fraction = animator.animatedValue as Float
+                val currentSize = fromSize + (toSize - fromSize) * fraction
                 
-                params.width = newSize.toInt()
-                params.height = newSize.toInt()
-                params.x = (startX + (endX - startX) * frac).toInt()
-                params.y = (startY + (endY - startY) * frac).toInt()
+                params.width = currentSize.toInt()
+                params.height = currentSize.toInt()
+                params.x = (startX + (endX - startX) * fraction).toInt()
+                params.y = (startY + (endY - startY) * fraction).toInt()
 
                 try {
                     windowManager.updateViewLayout(overlayView, params)
@@ -735,22 +752,25 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             addListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
                     windowAnimator = null
-                    isWindowResizing = false
-                    preventPositionUpdates = false  // FIXED: Unlock position updates
-
-                    // Ensure final position is set
+                    
+                    // Force exact final values (prevent rounding errors)
                     params.width = toSize.toInt()
                     params.height = toSize.toInt()
-                    params.x = (bubbleScreenX - toHalf).toInt()
-                    params.y = (bubbleScreenY - toHalf).toInt()
+                    params.x = (capturedBubbleX - toHalf).toInt()
+                    params.y = (capturedBubbleY - toHalf).toInt()
                     
                     try {
                         windowManager.updateViewLayout(overlayView, params)
                     } catch (e: Exception) {
                         // Ignore
                     }
-
-                    onEnd?.invoke()
+                    
+                    // Small delay before unlocking to ensure window manager settles
+                    overlayView.postDelayed({
+                        isWindowResizing = false
+                        preventPositionUpdates = false
+                        onEnd?.invoke()
+                    }, 50)
                 }
             })
             start()

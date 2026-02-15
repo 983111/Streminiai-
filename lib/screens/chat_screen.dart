@@ -7,6 +7,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:mime/mime.dart';
 import '../providers/chat_provider.dart';
 import '../models/message_model.dart';
+import '../core/widgets/app_drawer.dart';
+import '../services/keyboard_service.dart';
+
+// Add keyboard provider
+final keyboardServiceProvider =
+    Provider<KeyboardService>((ref) => KeyboardService());
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -19,7 +25,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _focusNode = FocusNode();
-  
+
   // Attachment State
   File? _selectedFile;
   String? _base64File;
@@ -53,12 +59,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               onTap: () async {
                 Navigator.pop(context);
                 final picker = ImagePicker();
-                final XFile? image = await picker.pickImage(source: ImageSource.gallery);
+                final XFile? image =
+                    await picker.pickImage(source: ImageSource.gallery);
                 if (image != null) _processFile(File(image.path));
               },
             ),
             ListTile(
-              leading: const Icon(Icons.insert_drive_file, color: Colors.orange),
+              leading:
+                  const Icon(Icons.insert_drive_file, color: Colors.orange),
               title: const Text('File', style: TextStyle(color: Colors.white)),
               onTap: () async {
                 Navigator.pop(context);
@@ -107,13 +115,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final text = _controller.text.trim();
     if (text.isEmpty && _selectedFile == null) return;
 
-    ref.read(chatNotifierProvider.notifier).sendMessage(
-      text, 
-      attachment: _base64File,
-      mimeType: _mimeType,
-      fileName: _fileName
-    );
-    
+    ref.read(chatNotifierProvider.notifier).sendMessage(text,
+        attachment: _base64File, mimeType: _mimeType, fileName: _fileName);
+
     _controller.clear();
     _clearAttachment();
     _focusNode.unfocus();
@@ -133,7 +137,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final chatState = ref.watch(chatNotifierProvider);
     // Auto-scroll listener... (same as original)
-    ref.listen<AsyncValue<List<Message>>>(chatNotifierProvider, (previous, next) {
+    ref.listen<AsyncValue<List<Message>>>(chatNotifierProvider,
+        (previous, next) {
       next.whenData((messages) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scrollController.hasClients) {
@@ -162,19 +167,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         title: const Text('Stremini AI', style: TextStyle(color: Colors.white)),
         centerTitle: true,
       ),
-      drawer: _buildDrawer(), // (Use your existing drawer method)
+      drawer: _buildDrawer(context),
       body: Column(
         children: [
           Expanded(
             child: chatState.when(
               data: (messages) => ListView.builder(
                 controller: _scrollController,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
                 itemCount: messages.length,
-                itemBuilder: (context, index) => _buildMessageBubble(messages[index]),
+                itemBuilder: (context, index) =>
+                    _buildMessageBubble(messages[index]),
               ),
               loading: () => const Center(child: CircularProgressIndicator()),
-              error: (error, _) => Center(child: Text('Error: $error', style: const TextStyle(color: Colors.red))),
+              error: (error, _) => Center(
+                  child: Text('Error: $error',
+                      style: const TextStyle(color: Colors.red))),
             ),
           ),
 
@@ -195,9 +204,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     child: _mimeType?.startsWith('image/') == true
                         ? ClipRRect(
                             borderRadius: BorderRadius.circular(8),
-                            child: Image.file(_selectedFile!, fit: BoxFit.cover),
+                            child:
+                                Image.file(_selectedFile!, fit: BoxFit.cover),
                           )
-                        : const Icon(Icons.insert_drive_file, color: Colors.white),
+                        : const Icon(Icons.insert_drive_file,
+                            color: Colors.white),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -221,7 +232,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
               color: Colors.black,
-              border: Border(top: BorderSide(color: Colors.grey[800]!, width: 1)),
+              border:
+                  Border(top: BorderSide(color: Colors.grey[800]!, width: 1)),
             ),
             child: SafeArea(
               child: Row(
@@ -230,9 +242,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   Container(
                     width: 44,
                     height: 44,
-                    decoration: BoxDecoration(color: Colors.grey[900], shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                        color: Colors.grey[900], shape: BoxShape.circle),
                     child: IconButton(
-                      icon: const Icon(Icons.add, color: Colors.white, size: 24),
+                      icon:
+                          const Icon(Icons.add, color: Colors.white, size: 24),
                       onPressed: _pickAttachment, // Call picker
                     ),
                   ),
@@ -248,10 +262,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       child: TextField(
                         controller: _controller,
                         focusNode: _focusNode,
-                        style: const TextStyle(color: Colors.white, fontSize: 15),
+                        style:
+                            const TextStyle(color: Colors.white, fontSize: 15),
                         decoration: const InputDecoration(
                           hintText: 'Ask anything...',
-                          hintStyle: TextStyle(color: Colors.grey, fontSize: 15),
+                          hintStyle:
+                              TextStyle(color: Colors.grey, fontSize: 15),
                           border: InputBorder.none,
                           contentPadding: EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -267,11 +283,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     width: 44,
                     height: 44,
                     decoration: const BoxDecoration(
-                      gradient: LinearGradient(colors: [Color(0xFF23A6E2), Color(0xFF0066FF)]),
+                      gradient: LinearGradient(
+                          colors: [Color(0xFF23A6E2), Color(0xFF0066FF)]),
                       shape: BoxShape.circle,
                     ),
                     child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white, size: 20),
+                      icon:
+                          const Icon(Icons.send, color: Colors.white, size: 20),
                       onPressed: _sendMessage,
                     ),
                   ),
@@ -294,7 +312,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
-        mainAxisAlignment: isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment:
+            isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
           Flexible(
             child: Container(
@@ -306,7 +325,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               // Use SelectableText to enable copying
               child: SelectableText(
                 message.text,
-                style: const TextStyle(color: Colors.white, fontSize: 15, height: 1.4),
+                style: const TextStyle(
+                    color: Colors.white, fontSize: 15, height: 1.4),
                 cursorColor: const Color(0xFF23A6E2),
               ),
             ),
@@ -317,7 +337,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Widget _buildTypingIndicatorBubble() {
-     return Padding(
+    return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
         children: [
@@ -327,18 +347,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               color: Colors.grey[900],
               borderRadius: BorderRadius.circular(20),
             ),
-            child: const Text("Typing...", style: TextStyle(color: Colors.white54)),
+            child: const Text("Typing...",
+                style: TextStyle(color: Colors.white54)),
           ),
         ],
       ),
     );
   }
-  
+
   // Re-include your original _buildDrawer() method here...
-  Widget _buildDrawer() {
-    return Drawer(
-      backgroundColor: const Color(0xFF1A1A1A),
-      child: Container(), // Placeholder: Insert your original drawer code here
+  Widget _buildDrawer(BuildContext context) {
+    return AppDrawer(
+      items: [
+        AppDrawerItem(
+          icon: Icons.home,
+          title: 'Home',
+          onTap: () => Navigator.pop(context),
+        ),
+        AppDrawerItem(
+          icon: Icons.keyboard,
+          title: 'AI Keyboard',
+          onTap: () {
+            Navigator.pop(context);
+            ref.read(keyboardServiceProvider).openKeyboardSettingsActivity();
+          },
+        ),
+        AppDrawerItem(
+          icon: Icons.settings,
+          title: 'Settings',
+          onTap: () => Navigator.pop(context),
+        ),
+        AppDrawerItem(
+          icon: Icons.help_outline,
+          title: 'Contact Us',
+          onTap: () => Navigator.pop(context),
+        ),
+      ],
     );
   }
 }

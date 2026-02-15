@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "Android.stremini_ai"
-    // UPDATED: 34 -> 36 (Required by image_picker)
+    // Updated: compileSdk must match or exceed plugin requirements (36)
     compileSdk = 36
     ndkVersion = "29.0.14206865"
 
@@ -22,7 +22,7 @@ android {
     defaultConfig {
         applicationId = "Android.stremini_ai"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36  // Updated to match compileSdk
         versionCode = 1
         versionName = "1.0.0"
 
@@ -38,7 +38,6 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             isMinifyEnabled = false
@@ -61,10 +60,15 @@ flutter {
 }
 
 dependencies {
-    implementation("com.squareup.okhttp3:okhttp:4.11.0")
-    implementation("org.json:json:20231013")
+    // Core Android libraries
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("com.google.android.play:core:1.10.3")
+    implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.cardview:cardview:1.0.0")
-    implementation("androidx.appcompat:appcompat:1.6.1")
+    
+    // Network and JSON
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.json:json:20240303")
+    
+    // Google Play Services - for in-app updates
+    implementation("com.google.android.play:core:1.10.3")
 }
