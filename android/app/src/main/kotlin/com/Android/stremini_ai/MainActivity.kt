@@ -1,5 +1,6 @@
-package Android.stremini_ai
+package com.Android.stremini_ai
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -11,12 +12,16 @@ import android.text.TextUtils
 import android.util.Log
 import android.widget.Toast
 import android.view.inputmethod.InputMethodManager
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import android.content.pm.PackageManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private val microphonePermissionRequestCode = 1001
     private val channelName = "stremini.chat.overlay"
     private val eventChannelName = "stremini.chat.overlay/events"
     private val keyboardChannelName = "stremini.keyboard"
@@ -51,7 +56,7 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         
         // Scanner method channel
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "Android.stremini_ai").setMethodCallHandler { call, result ->
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.Android.stremini_ai").setMethodCallHandler { call, result ->
             when (call.method) {
                 "startScanner" -> {
                     result.success(true)
@@ -78,6 +83,13 @@ class MainActivity : FlutterActivity() {
                 }
                 "requestAccessibilityPermission" -> {
                     requestAccessibilityPermissionSafe()
+                    result.success(true)
+                }
+                "hasMicrophonePermission" -> {
+                    result.success(hasMicrophonePermission())
+                }
+                "requestMicrophonePermission" -> {
+                    requestMicrophonePermission()
                     result.success(true)
                 }
                 "startScreenScan" -> {
@@ -232,6 +244,19 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun hasMicrophonePermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestMicrophonePermission() {
+        if (hasMicrophonePermission()) return
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.RECORD_AUDIO),
+            microphonePermissionRequestCode
+        )
+    }
+
     private fun startOverlayServiceSafe() {
         try {
             if (!hasOverlayPermission()) {
@@ -354,4 +379,22 @@ class MainActivity : FlutterActivity() {
             Log.e("MainActivity", "Error unregistering receiver", e)
         }
     }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == microphonePermissionRequestCode) {
+            val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            Toast.makeText(
+                this,
+                if (granted) "Microphone permission granted" else "Microphone permission denied",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+
 }

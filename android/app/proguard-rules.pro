@@ -10,14 +10,14 @@
 
 # Keep AccessibilityService
 -keep class * extends android.accessibilityservice.AccessibilityService { *; }
--keep class Android.stremini_ai.ScreenReaderService { *; }
+-keep class com.Android.stremini_ai.ScreenReaderService { *; }
 
 # Keep Service classes
 -keep class * extends android.app.Service { *; }
--keep class Android.stremini_ai.ChatOverlayService { *; }
+-keep class com.Android.stremini_ai.ChatOverlayService { *; }
 
 # Keep Activity
--keep class Android.stremini_ai.MainActivity { *; }
+-keep class com.Android.stremini_ai.MainActivity { *; }
 
 # Keep OkHttp
 -dontwarn okhttp3.**

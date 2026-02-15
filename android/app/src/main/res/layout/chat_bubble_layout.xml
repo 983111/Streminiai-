@@ -74,7 +74,7 @@
         android:background="@drawable/circle_bg_black"
         android:src="@drawable/keyboard_icon"
         android:padding="15dp"
-        android:contentDescription="Voice Commands"
+        android:contentDescription="AI Keyboard"
         android:layout_gravity="center"
         android:elevation="10dp"
         android:scaleType="fitCenter"
@@ -104,15 +104,15 @@
         android:clickable="true"
         android:focusable="true"/>
 
-    <!-- Refresh Button -->
+    <!-- Auto Tasker Button -->
     <ImageView
-        android:id="@+id/btn_refresh"
+        android:id="@+id/btn_auto_tasker"
         android:layout_width="50dp"
         android:layout_height="50dp"
         android:background="@drawable/circle_bg_black"
-        android:src="@drawable/ai_chatbot"
+        android:src="@android:drawable/ic_btn_speak_now"
         android:padding="15dp"
-        android:contentDescription="Refresh"
+        android:contentDescription="Auto Tasker"
         android:layout_gravity="center"
         android:elevation="10dp"
         android:scaleType="fitCenter"

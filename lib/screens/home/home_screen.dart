@@ -103,6 +103,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   color: AppColors.emotional,
                   onTap: () => controller.requestAccessibilityPermission(),
                 ),
+              if (state.permissionStatus.needsMicrophone)
+                PermissionCard(
+                  title: 'Microphone Permission',
+                  description: 'Required for Auto Tasker voice commands',
+                  icon: Icons.mic,
+                  color: AppColors.info,
+                  onTap: () => controller.requestMicrophonePermission(),
+                ),
               const SizedBox(height: 16),
               AppContainer(
                 padding: const EdgeInsets.all(16),
@@ -115,7 +123,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        'Both permissions are required for the floating bubble to work properly',
+                        'Overlay, Accessibility, and Microphone permissions are required for all AI tools to work properly',
                         style:
                             AppTextStyles.body3.copyWith(color: AppColors.info),
                       ),

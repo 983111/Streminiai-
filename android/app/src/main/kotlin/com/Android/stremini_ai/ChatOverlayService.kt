@@ -1,4 +1,4 @@
-package Android.stremini_ai
+package com.Android.stremini_ai
 
 import android.animation.ValueAnimator
 import android.animation.Animator
@@ -11,8 +11,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -27,6 +32,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.embedding.engine.dart.DartExecutor
@@ -48,10 +54,10 @@ import kotlin.math.sin
 class ChatOverlayService : Service(), View.OnTouchListener {
 
     companion object {
-        const val ACTION_SEND_MESSAGE = "Android.stremini_ai.SEND_MESSAGE"
+        const val ACTION_SEND_MESSAGE = "com.Android.stremini_ai.SEND_MESSAGE"
         const val EXTRA_MESSAGE = "message"
-        const val ACTION_SCANNER_START = "Android.stremini_ai.SCANNER_START"
-        const val ACTION_SCANNER_STOP = "Android.stremini_ai.SCANNER_STOP"
+        const val ACTION_SCANNER_START = "com.Android.stremini_ai.SCANNER_START"
+        const val ACTION_SCANNER_STOP = "com.Android.stremini_ai.SCANNER_STOP"
         val NEON_BLUE: Int = android.graphics.Color.parseColor("#00D9FF")
         val WHITE: Int = android.graphics.Color.parseColor("#FFFFFF")
     }
@@ -72,7 +78,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var isScannerActive = false
     private lateinit var inputMethodManager: InputMethodManager
     
-    private lateinit var scannerChannel: android.view.inputmethod.InputMethodManager
+    private var autoTaskerView: View? = null
+    private var autoTaskerParams: WindowManager.LayoutParams? = null
+    private var speechRecognizer: SpeechRecognizer? = null
+    private var isAutoTaskerVisible = false
 
     private var initialX = 0
     private var initialY = 0
@@ -155,7 +164,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         bubbleIcon = overlayView.findViewById(R.id.bubble_icon)
 
         menuItems = listOf(
-            overlayView.findViewById(R.id.btn_refresh),
+            overlayView.findViewById(R.id.btn_auto_tasker),
             overlayView.findViewById(R.id.btn_settings),
             overlayView.findViewById(R.id.btn_ai),
             overlayView.findViewById(R.id.btn_scanner),
@@ -203,7 +212,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
         menuItems[0].setOnClickListener {
             collapseMenu()
-            handleRefresh()
+            handleAutoTasker()
         }
         menuItems[1].setOnClickListener {
             collapseMenu()
@@ -219,7 +228,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
         menuItems[4].setOnClickListener {
             collapseMenu()
-            handleVoiceCommand()
+            handleKeyboard()
         }
 
         bubbleIcon.setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -413,6 +422,424 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
     }
 
+
+    private fun showAutoTasker(): Boolean {
+        if (isAutoTaskerVisible) return true
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            Toast.makeText(this, "Microphone permission is required. Opening app settings...", Toast.LENGTH_LONG).show()
+            try {
+                val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+            } catch (_: Exception) {}
+            return false
+        }
+
+        autoTaskerView = LayoutInflater.from(this).inflate(R.layout.auto_tasker_overlay, null)
+        val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
+        }
+
+        autoTaskerParams = WindowManager.LayoutParams(
+            dpToPx(320f),
+            dpToPx(420f),
+            typeParam,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.CENTER
+        }
+
+        autoTaskerView?.findViewById<ImageView>(R.id.btn_close_tasker)?.setOnClickListener {
+            hideAutoTasker()
+            activeFeatures.remove(menuItems[0].id)
+            updateMenuItemsColor()
+        }
+
+        autoTaskerView?.findViewById<ImageView>(R.id.btn_start_listening)?.setOnClickListener {
+            startVoiceCapture()
+        }
+
+        windowManager.addView(autoTaskerView, autoTaskerParams)
+        isAutoTaskerVisible = true
+        startVoiceCapture()
+        return true
+    }
+
+    private fun hideAutoTasker() {
+        speechRecognizer?.destroy()
+        speechRecognizer = null
+        autoTaskerView?.let { windowManager.removeView(it) }
+        autoTaskerView = null
+        autoTaskerParams = null
+        isAutoTaskerVisible = false
+    }
+
+    private fun startVoiceCapture() {
+        val view = autoTaskerView ?: return
+        val status = view.findViewById<TextView>(R.id.tv_tasker_status)
+        status.text = "Listening..."
+
+        speechRecognizer?.destroy()
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            status.text = "Speech recognition not available on this device"
+            return
+        }
+
+        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+            setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: android.os.Bundle?) { status.text = "Speak now..." }
+                override fun onBeginningOfSpeech() { status.text = "Listening..." }
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() { status.text = "Processing your command..." }
+                override fun onError(error: Int) { status.text = "Voice capture failed ($error). Please try again." }
+                override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+                override fun onPartialResults(partialResults: android.os.Bundle?) {}
+                override fun onResults(results: android.os.Bundle?) {
+                    val command = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
+                    if (command.isNullOrBlank()) {
+                        status.text = "Could not understand. Try again."
+                    } else {
+                        status.text = "Understood: $command"
+                        view.findViewById<TextView>(R.id.tv_tasker_output).text = "You said: $command\n\nPlanning actions..."
+                        sendVoiceTaskCommand(command)
+                    }
+                }
+            })
+        }
+
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+        }
+        speechRecognizer?.startListening(intent)
+    }
+
+    // UPDATED FUNCTION with correct URL
+    private fun sendVoiceTaskCommand(command: String) {
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val payload = JSONObject().apply {
+                    put("command", command)
+                    put("query", command)
+                    put("instruction", command)
+                    put("ui_context", JSONObject())
+                    // Request real execution instead of plan-only previews.
+                    put("execute", true)
+                    put("dryRun", false)
+                    put("autoExecute", true)
+                }
+                val body = payload.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    // FIXED: Added /automation prefix to match index.js mount point
+                    .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/automation/execute-task")
+                    .post(body)
+                    .build()
+
+                val response = client.newCall(request).execute()
+                val (uiStatus, uiOutput) = if (response.isSuccessful) {
+                    val raw = response.body?.string().orEmpty()
+                    try {
+                        val json = JSONObject(raw)
+                        when {
+                            json.has("execution_result") || json.has("result") -> {
+                                val resultValue = if (json.has("execution_result")) json.opt("execution_result") else json.opt("result")
+                                "Task completed" to "Task executed\n\n$resultValue"
+                            }
+                            json.has("plan") -> {
+                                val localExecutionSummary = executePlanLocally(json.optJSONArray("plan"))
+                                if (localExecutionSummary != null && localExecutionSummary.executed > 0) {
+                                    val status = if (localExecutionSummary.failed > 0) {
+                                        "Task partially completed"
+                                    } else {
+                                        "Task completed"
+                                    }
+                                    val output = buildString {
+                                        append("Plan received and executed on device\n")
+                                        append("Executed: ${localExecutionSummary.executed}")
+                                        append(" | Skipped: ${localExecutionSummary.skipped}")
+                                        append(" | Failed: ${localExecutionSummary.failed}\n\n")
+                                        if (localExecutionSummary.notes.isNotBlank()) {
+                                            append(localExecutionSummary.notes)
+                                            append("\n\n")
+                                        }
+                                        append("Original plan:\n")
+                                        append(json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                    }
+                                    status to output
+                                } else {
+                                    "Plan ready (execution unavailable)" to (
+                                        "Plan generated only\n\n" + (json.optJSONArray("plan")?.toString(2) ?: "[]")
+                                    )
+                                }
+                            }
+                            json.has("summary") -> {
+                                "Task response received" to (json.optString("summary") + "\n\n" + json.toString(2))
+                            }
+                            else -> {
+                                "Task response received" to json.toString(2)
+                            }
+                        }
+                    } catch (_: Exception) {
+                        "Task response received" to raw
+                    }
+                } else {
+                    "Failed to execute task" to "Server error: ${response.code}"
+                }
+
+                val directCommandRan = executeDirectVoiceCommand(command)
+                val finalStatus = if (directCommandRan && uiStatus.contains("response", ignoreCase = true)) {
+                    "Task completed"
+                } else {
+                    uiStatus
+                }
+                val finalOutput = if (directCommandRan && uiOutput.isNotBlank()) {
+                    "Direct device automation executed.\n\n$uiOutput"
+                } else if (directCommandRan) {
+                    "Direct device automation executed."
+                } else {
+                    uiOutput
+                }
+
+                withContext(Dispatchers.Main) {
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = finalStatus
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = finalOutput
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)?.text = "Failed to execute task"
+                    autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = e.message ?: "Unknown error"
+                }
+            }
+        }
+    }
+
+    private data class PlanExecutionSummary(
+        val executed: Int,
+        val skipped: Int,
+        val failed: Int,
+        val notes: String
+    )
+
+    private fun executePlanLocally(planArray: org.json.JSONArray?): PlanExecutionSummary? {
+        if (planArray == null || planArray.length() == 0) return null
+
+        var executed = 0
+        var skipped = 0
+        var failed = 0
+        val notes = mutableListOf<String>()
+
+        for (i in 0 until planArray.length()) {
+            val rawStep = planArray.opt(i)
+            val stepJson = when (rawStep) {
+                is JSONObject -> rawStep
+                is String -> {
+                    val parsed = JSONObject()
+                    parsed.put("action", rawStep)
+                    parsed
+                }
+                else -> null
+            }
+
+            if (stepJson == null) {
+                skipped++
+                notes.add("Step ${i + 1}: unsupported step format")
+                continue
+            }
+
+            val didRun = runCatching { executeSinglePlanStep(stepJson) }.getOrElse {
+                failed++
+                notes.add("Step ${i + 1}: failed (${it.message ?: "unknown error"})")
+                false
+            }
+
+            if (didRun) {
+                executed++
+            } else {
+                skipped++
+                notes.add("Step ${i + 1}: no matching local action")
+            }
+        }
+
+        return PlanExecutionSummary(
+            executed = executed,
+            skipped = skipped,
+            failed = failed,
+            notes = notes.joinToString("\n")
+        )
+    }
+
+    private fun executeSinglePlanStep(step: JSONObject): Boolean {
+        val actionRaw = when {
+            step.has("action") -> step.optString("action")
+            step.has("type") -> step.optString("type")
+            step.has("tool") -> step.optString("tool")
+            else -> ""
+        }.lowercase().trim()
+
+        val targetRaw = step.optString("target", "").lowercase().trim()
+        val description = step.optString("description", "").lowercase().trim()
+        val messageText = when {
+            step.has("message") -> step.optString("message")
+            step.has("text") -> step.optString("text")
+            else -> ""
+        }
+        val contactName = when {
+            step.has("contact") -> step.optString("contact")
+            step.has("recipient") -> step.optString("recipient")
+            step.has("name") -> step.optString("name")
+            else -> ""
+        }
+        val combinedText = listOf(actionRaw, targetRaw, description, messageText.lowercase(), contactName.lowercase())
+            .joinToString(" ")
+
+        return when {
+            combinedText.contains("whatsapp") && combinedText.contains("message") -> {
+                val (parsedContact, parsedMessage) = extractWhatsAppIntentFromStep(step)
+                if (parsedContact.isBlank()) return false
+
+                val finalMessage = if (parsedMessage.isBlank()) {
+                    "Hey ${parsedContact}, this is an automated message."
+                } else {
+                    parsedMessage
+                }
+
+                ScreenReaderService.runWhatsAppMessageAutomation(parsedContact, finalMessage)
+            }
+            actionRaw.contains("scanner") || targetRaw.contains("scanner") || description.contains("scan") -> {
+                if (!isScannerActive) {
+                    handleScanner()
+                }
+                true
+            }
+            actionRaw.contains("keyboard") || targetRaw.contains("keyboard") || description.contains("keyboard") -> {
+                handleKeyboard()
+                true
+            }
+            actionRaw.contains("settings") || targetRaw.contains("settings") -> {
+                handleSettings()
+                true
+            }
+            actionRaw.contains("chat") || targetRaw.contains("chat") -> {
+                showFloatingChatbot()
+                true
+            }
+            actionRaw.contains("home") -> {
+                val intent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+                true
+            }
+            actionRaw.contains("open_app") || actionRaw.contains("launch") -> {
+                val packageName = when {
+                    step.has("package") -> step.optString("package")
+                    step.has("packageName") -> step.optString("packageName")
+                    else -> ""
+                }
+                if (packageName.isBlank()) return false
+
+                val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(launchIntent)
+                    true
+                } else {
+                    false
+                }
+            }
+            else -> false
+        }
+    }
+
+    private fun executeDirectVoiceCommand(command: String): Boolean {
+        val normalized = command.trim().lowercase()
+        if (normalized.isBlank()) return false
+
+        if (normalized.contains("whatsapp") && normalized.contains("message")) {
+            val contact = Regex("message\\s+([a-zA-Z0-9 _.-]+?)(?:\\s+that|\\s+saying|\\s+to\\s+say|$)")
+                .find(normalized)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                .orEmpty()
+
+            val message = Regex("(?:that|saying|to say)\\s+(.+)$", RegexOption.IGNORE_CASE)
+                .find(command)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.trim()
+                .orEmpty()
+
+            if (contact.isNotBlank()) {
+                return ScreenReaderService.runWhatsAppMessageAutomation(
+                    contactName = contact,
+                    message = if (message.isBlank()) "Hey $contact" else message
+                )
+            }
+        }
+
+        if (normalized.contains("open whatsapp")) {
+            val launchIntent = packageManager.getLaunchIntentForPackage("com.whatsapp") ?: return false
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(launchIntent)
+            return true
+        }
+
+        // Fallback: ask accessibility automation layer to execute broader commands.
+        return ScreenReaderService.runGenericAutomation(command)
+    }
+
+    private fun extractWhatsAppIntentFromStep(step: JSONObject): Pair<String, String> {
+        val directContact = when {
+            step.has("contact") -> step.optString("contact")
+            step.has("recipient") -> step.optString("recipient")
+            step.has("name") -> step.optString("name")
+            else -> ""
+        }.trim()
+
+        val directMessage = when {
+            step.has("message") -> step.optString("message")
+            step.has("text") -> step.optString("text")
+            else -> ""
+        }.trim()
+
+        if (directContact.isNotBlank()) {
+            return directContact to directMessage
+        }
+
+        val source = listOf(
+            step.optString("action", ""),
+            step.optString("description", ""),
+            step.optString("instruction", "")
+        ).joinToString(" ").trim()
+
+        val normalized = source.lowercase()
+        val contact = Regex("message\\s+([a-zA-Z0-9 _.-]+?)(?:\\s+that|\\s+saying|\\s+to\\s+say|$)")
+            .find(normalized)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: ""
+
+        val message = Regex("(?:that|saying|to say)\\s+(.+)$", RegexOption.IGNORE_CASE)
+            .find(source)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.trim()
+            ?: ""
+
+        return contact to message
+    }
+
     private fun hideFloatingChatbot() {
         if (!isChatbotVisible) return
         floatingChatView?.let { view ->
@@ -452,9 +879,9 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
     }
 
-    private fun handleVoiceCommand() {
+    private fun handleKeyboard() {
         toggleFeature(menuItems[4].id)
-        
+
         if (isFeatureActive(menuItems[4].id)) {
             try {
                 val intent = Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS)
@@ -479,20 +906,17 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         Toast.makeText(this, "Opening Stremini...", Toast.LENGTH_SHORT).show()
     }
 
-    private fun handleRefresh() {
-        activeFeatures.clear()
-        
-        if (isScannerActive) {
-            isScannerActive = false
-            val intent = Intent(this, ScreenReaderService::class.java)
-            intent.action = ScreenReaderService.ACTION_STOP_SCAN
-            startService(intent)
+    private fun handleAutoTasker() {
+        toggleFeature(menuItems[0].id)
+        if (isFeatureActive(menuItems[0].id)) {
+            val opened = showAutoTasker()
+            if (!opened) {
+                activeFeatures.remove(menuItems[0].id)
+                updateMenuItemsColor()
+            }
+        } else {
+            hideAutoTasker()
         }
-        
-        hideFloatingChatbot()
-        
-        updateMenuItemsColor()
-        Toast.makeText(this, "Refresh Complete - All features reset", Toast.LENGTH_SHORT).show()
     }
 
     private fun toggleFeature(featureId: Int) {
@@ -820,6 +1244,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         serviceScope.cancel()
         unregisterReceiver(controlReceiver)
         hideFloatingChatbot()
+        hideAutoTasker()
         if (::overlayView.isInitialized && overlayView.windowToken != null) windowManager.removeView(overlayView)
     }
-}
+} 
