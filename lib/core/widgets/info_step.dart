@@ -6,18 +6,18 @@ class InfoStep extends StatelessWidget {
   final String number;
   final String text;
   final Color? color;
-  
+
   const InfoStep({
     super.key,
     required this.number,
     required this.text,
     this.color,
   });
-  
+
   @override
   Widget build(BuildContext context) {
     final stepColor = color ?? AppColors.scanCyan;
-    
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0),
       child: Row(
@@ -27,7 +27,7 @@ class InfoStep extends StatelessWidget {
             width: 24,
             height: 24,
             decoration: BoxDecoration(
-              color: stepColor.withOpacity(0.2),
+              color: stepColor.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: stepColor),
             ),

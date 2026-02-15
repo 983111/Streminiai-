@@ -13,7 +13,7 @@ class FeatureCard extends StatelessWidget {
   final List<String> badges;
   final Widget? trailing;
   final VoidCallback? onTap;
-  
+
   const FeatureCard({
     super.key,
     required this.title,
@@ -26,7 +26,7 @@ class FeatureCard extends StatelessWidget {
     this.trailing,
     this.onTap,
   });
-  
+
   @override
   Widget build(BuildContext context) {
     return AppContainer(
@@ -41,7 +41,7 @@ class FeatureCard extends StatelessWidget {
               AppContainer(
                 width: 56,
                 height: 56,
-                color: iconColor.withOpacity(0.2),
+                color: iconColor.withValues(alpha: 0.2),
                 child: Icon(icon, color: iconColor, size: 28),
               ),
               const SizedBox(width: 16),
@@ -85,10 +85,11 @@ class FeatureCard extends StatelessWidget {
             runSpacing: 8,
             children: badges.map((badge) {
               return AppContainer(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                color: iconColor.withOpacity(0.1),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                color: iconColor.withValues(alpha: 0.1),
                 borderRadius: 12,
-                border: BorderSide(color: iconColor.withOpacity(0.3)),
+                border: BorderSide(color: iconColor.withValues(alpha: 0.3)),
                 child: Text(
                   badge,
                   style: AppTextStyles.caption.copyWith(color: iconColor),

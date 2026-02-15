@@ -80,7 +80,7 @@ class _ChatOverlayManagerState extends ConsumerState<ChatOverlayManager> {
 
   Widget _buildMaximizedChat(BuildContext context) {
     return Material(
-      color: Colors.black.withOpacity(0.95),
+      color: Colors.black.withValues(alpha: 0.95),
       child: Stack(
         children: [
           const ChatScreen(),

@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'package:stremini_chatbot/widgets/drawer_widgets/app_search_bar.dart';
@@ -14,7 +13,7 @@ class AppDrawer extends StatelessWidget {
           children: [
             Padding(
               padding: const EdgeInsets.only(left: 16, right: 16),
-              child: App_Search_Bar(),
+              child: AppSearchBar(),
             ),
             const SizedBox(
               height: 86,

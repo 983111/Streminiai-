@@ -106,8 +106,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               const SizedBox(height: 16),
               AppContainer(
                 padding: const EdgeInsets.all(16),
-                color: AppColors.info.withOpacity(0.1),
-                border: BorderSide(color: AppColors.info.withOpacity(0.3)),
+                color: AppColors.info.withValues(alpha: 0.1),
+                border:
+                    BorderSide(color: AppColors.info.withValues(alpha: 0.3)),
                 child: Row(
                   children: [
                     Icon(Icons.info_outline, color: AppColors.info, size: 24),
@@ -192,11 +193,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          AppColors.primary.withOpacity(0.2),
-          AppColors.secondary.withOpacity(0.2),
+          AppColors.primary.withValues(alpha: 0.2),
+          AppColors.secondary.withValues(alpha: 0.2),
         ],
       ),
-      border: BorderSide(color: AppColors.info.withOpacity(0.3)),
+      border: BorderSide(color: AppColors.info.withValues(alpha: 0.3)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -207,9 +208,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               AppContainer(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                color: AppColors.white.withOpacity(0.1),
+                color: AppColors.white.withValues(alpha: 0.1),
                 borderRadius: 20,
-                border: BorderSide(color: AppColors.white.withOpacity(0.2)),
+                border:
+                    BorderSide(color: AppColors.white.withValues(alpha: 0.2)),
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (context) => const ChatScreen()),
@@ -217,12 +219,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 child: Row(
                   children: [
                     Icon(Icons.touch_app,
-                        color: AppColors.info.withOpacity(0.8), size: 16),
+                        color: AppColors.info.withValues(alpha: 0.8), size: 16),
                     const SizedBox(width: 4),
                     Text(
                       'Quick Chat',
                       style: AppTextStyles.body3.copyWith(
-                        color: AppColors.info.withOpacity(0.8),
+                        color: AppColors.info.withValues(alpha: 0.8),
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -307,7 +309,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         );
                       }
                     },
-              activeColor: AppColors.primary,
+              activeThumbColor: AppColors.primary,
             ),
     );
   }
@@ -355,7 +357,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   Widget _buildInfoCard() {
     return AppContainer(
       padding: const EdgeInsets.all(16),
-      border: BorderSide(color: AppColors.scanCyan.withOpacity(0.3)),
+      border: BorderSide(color: AppColors.scanCyan.withValues(alpha: 0.3)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

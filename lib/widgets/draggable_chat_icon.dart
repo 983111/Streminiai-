@@ -41,7 +41,7 @@ class GlowCircleButton extends StatelessWidget {
                 ]
               : [
                   BoxShadow(
-                    color: Colors.grey.withOpacity(0.3),
+                    color: Colors.grey.withValues(alpha: 0.3),
                     blurRadius: 2,
                     spreadRadius: 0,
                   ),
@@ -55,7 +55,7 @@ class GlowCircleButton extends StatelessWidget {
               color: Colors.black,
               border: isActive
                   ? Border.all(
-                      color: Colors.white.withOpacity(0.5),
+                      color: Colors.white.withValues(alpha: 0.5),
                       width: 1,
                     )
                   : null,

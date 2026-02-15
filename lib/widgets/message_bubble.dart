@@ -25,12 +25,17 @@ class MessageBubble extends StatelessWidget {
         decoration: BoxDecoration(
           color: isUser ? Colors.grey[800] : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
-          border: isUser ? null : Border.all(color: Colors.grey.withOpacity(0.3)), // Optional border for bot
+          border: isUser
+              ? null
+              : Border.all(
+                  color: Colors.grey
+                      .withValues(alpha: 0.3)), // Optional border for bot
         ),
         constraints: BoxConstraints(
           maxWidth: isUser
               ? MediaQuery.of(context).size.width * 0.75
-              : MediaQuery.of(context).size.width * 0.95, // Wider for bot code blocks
+              : MediaQuery.of(context).size.width *
+                  0.95, // Wider for bot code blocks
         ),
         // KEY CHANGE: SelectableText makes it copyable
         child: SelectableText(
@@ -41,10 +46,11 @@ class MessageBubble extends StatelessWidget {
             height: 1.5,
           ),
           cursorColor: Colors.blue,
-          toolbarOptions: const ToolbarOptions(
-            copy: true,
-            selectAll: true,
-          ),
+          contextMenuBuilder: (context, editableTextState) {
+            return AdaptiveTextSelectionToolbar.editableText(
+              editableTextState: editableTextState,
+            );
+          },
         ),
       ),
     );
@@ -56,7 +62,8 @@ class MessageBubble extends StatelessWidget {
       alignment: Alignment.centerLeft,
       child: Container(
         padding: const EdgeInsets.all(16),
-        child: const Text("...", style: TextStyle(color: Colors.white, fontSize: 24)),
+        child: const Text("...",
+            style: TextStyle(color: Colors.white, fontSize: 24)),
       ),
     );
   }

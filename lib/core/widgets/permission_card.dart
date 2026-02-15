@@ -24,8 +24,8 @@ class PermissionCard extends StatelessWidget {
     return AppContainer(
       padding: const EdgeInsets.all(16),
       margin: const EdgeInsets.only(bottom: 12),
-      color: color.withOpacity(0.1),
-      border: BorderSide(color: color.withOpacity(0.3)),
+      color: color.withValues(alpha: 0.1),
+      border: BorderSide(color: color.withValues(alpha: 0.3)),
       child: Row(
         children: [
           Icon(icon, color: color, size: 28),
@@ -52,7 +52,7 @@ class PermissionCard extends StatelessWidget {
             child: TextButton(
               onPressed: onTap,
               style: TextButton.styleFrom(
-                backgroundColor: color.withOpacity(0.2),
+                backgroundColor: color.withValues(alpha: 0.2),
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               ),
