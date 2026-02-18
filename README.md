@@ -1,6 +1,6 @@
 # Stremini AI
 
-**Package:** `Android.stremini_ai`
+**Package:** `com.Android.stremini_ai`
 **Platform:** Android (Hybrid Flutter/Kotlin)
 **Backend:** Cloudflare Workers
 
