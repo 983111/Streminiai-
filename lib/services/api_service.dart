@@ -99,46 +99,115 @@ class ApiService {
     }
   }
 
-  /// NEW: Connects to the Stremini GitHub Coding Agent
-  Future<String> processGithubAgentTask({
+  /// Runs the GitHub coder agent and automatically handles CONTINUE loops.
+  Future<GithubAgentRunResult> processGithubAgentTask({
     required String repoOwner,
     required String repoName,
     required String task,
   }) async {
+    final startedAt = DateTime.now();
+    final visitedFiles = <String>[];
+    final history = <Map<String, dynamic>>[];
+    const maxClientIterations = 5;
+    var iteration = 0;
+
     try {
-      // Prompt engineered to ensure the API provides only code as requested
-      final prompt = "TASK: $task\n\nREQUIRED: Provide ONLY the corrected code. No explanations, no markdown intro, just the raw code content.";
-
-      final response = await http.post(
-        Uri.parse(githubAgentUrl),
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
-        body: jsonEncode({
-          "repoOwner": repoOwner,
-          "repoName": repoName,
-          "task": prompt,
-          "history": [],
-        }),
-      );
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        
-        if (data['status'] == 'COMPLETED') {
-          return data['solution'] ?? "No code generated.";
-        } else if (data['status'] == 'CONTINUE') {
-          return "🔄 Agent is still reasoning... (Currently checking: ${data['nextFile']})";
-        } else if (data['status'] == 'ERROR') {
-          return "❌ Agent Error: ${data['message']}";
+      while (true) {
+        if (iteration > maxClientIterations) {
+          return GithubAgentRunResult(
+            status: 'ERROR',
+            summary: 'Stopped after $maxClientIterations iterations to prevent loops.',
+            rawPayload: '',
+            visitedFiles: visitedFiles,
+            iterationCount: iteration,
+            duration: DateTime.now().difference(startedAt),
+          );
         }
-        return "Unexpected response status: ${data['status']}";
-      } else {
-        return "❌ Server Error: ${response.statusCode}";
+
+        final response = await http.post(
+          Uri.parse(githubAgentUrl),
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          },
+          body: jsonEncode({
+            "repoOwner": repoOwner,
+            "repoName": repoName,
+            "task": task,
+            "history": history,
+            "readFiles": visitedFiles,
+            "iteration": iteration,
+          }),
+        );
+
+        if (response.statusCode != 200) {
+          return GithubAgentRunResult(
+            status: 'ERROR',
+            summary: 'Server Error: ${response.statusCode}',
+            rawPayload: response.body,
+            visitedFiles: visitedFiles,
+            iterationCount: iteration,
+            duration: DateTime.now().difference(startedAt),
+          );
+        }
+
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final status = data['status']?.toString() ?? 'ERROR';
+
+        if (status == 'CONTINUE') {
+          final nextFile = data['nextFile']?.toString() ?? 'unknown file';
+          final fileContent = data['fileContent']?.toString() ?? '';
+
+          history.addAll([
+            {'role': 'assistant', 'content': '<read_file path="$nextFile" />'},
+            {'role': 'user', 'content': 'File content of $nextFile:\n\n$fileContent'},
+          ]);
+
+          if (data['readFiles'] is List) {
+            visitedFiles
+              ..clear()
+              ..addAll(List<String>.from(data['readFiles']));
+          } else if (!visitedFiles.contains(nextFile)) {
+            visitedFiles.add(nextFile);
+          }
+
+          iteration = data['iteration'] is int ? data['iteration'] as int : iteration + 1;
+          continue;
+        }
+
+        return GithubAgentRunResult(
+          status: status,
+          summary: _summaryFromResponse(data),
+          rawPayload: const JsonEncoder.withIndent('  ').convert(data),
+          visitedFiles: visitedFiles,
+          iterationCount: iteration,
+          duration: DateTime.now().difference(startedAt),
+          filePath: data['filePath']?.toString(),
+          pushed: data['pushed'] == true,
+        );
       }
     } catch (e) {
-      return "⚠️ Network Error: $e";
+      return GithubAgentRunResult(
+        status: 'ERROR',
+        summary: 'Network Error: $e',
+        rawPayload: '',
+        visitedFiles: visitedFiles,
+        iterationCount: iteration,
+        duration: DateTime.now().difference(startedAt),
+      );
+    }
+  }
+
+  String _summaryFromResponse(Map<String, dynamic> data) {
+    switch (data['status']) {
+      case 'COMPLETED':
+        return data['solution']?.toString() ?? 'Task completed without solution text.';
+      case 'FIXED':
+        return data['pushMessage']?.toString() ?? 'Fix generated and pushed.';
+      case 'ERROR':
+        return data['message']?.toString() ?? 'Agent returned an error.';
+      default:
+        return 'Unexpected response status: ${data['status']}';
     }
   }
 
@@ -202,6 +271,28 @@ class VoiceCommandResult {
   final String action; 
   final Map<String, dynamic> parameters;
   VoiceCommandResult({required this.action, required this.parameters});
+}
+
+class GithubAgentRunResult {
+  final String status;
+  final String summary;
+  final String rawPayload;
+  final List<String> visitedFiles;
+  final int iterationCount;
+  final Duration duration;
+  final String? filePath;
+  final bool pushed;
+
+  const GithubAgentRunResult({
+    required this.status,
+    required this.summary,
+    required this.rawPayload,
+    required this.visitedFiles,
+    required this.iterationCount,
+    required this.duration,
+    this.filePath,
+    this.pushed = false,
+  });
 }
 
 final apiServiceProvider = Provider<ApiService>((ref) => ApiService());
