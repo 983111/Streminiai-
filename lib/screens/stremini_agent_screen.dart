@@ -17,7 +17,8 @@ class _StreminiAgentScreenState extends ConsumerState<StreminiAgentScreen> {
   final TextEditingController _ownerController = TextEditingController();
   final TextEditingController _repoController = TextEditingController();
   final TextEditingController _taskController = TextEditingController();
-  String _resultCode = "";
+
+  GithubAgentRunResult? _runResult;
   bool _isLoading = false;
 
   @override
@@ -38,28 +39,35 @@ class _StreminiAgentScreenState extends ConsumerState<StreminiAgentScreen> {
 
     setState(() {
       _isLoading = true;
-      _resultCode = "";
+      _runResult = null;
     });
 
     try {
       final api = ref.read(apiServiceProvider);
-      final response = await api.processGithubAgentTask(
+      final result = await api.processGithubAgentTask(
         repoOwner: _ownerController.text.trim(),
         repoName: _repoController.text.trim(),
         task: _taskController.text.trim(),
       );
 
       setState(() {
-        _resultCode = response;
-      });
-    } catch (e) {
-      setState(() {
-        _resultCode = "Error: $e";
+        _runResult = result;
       });
     } finally {
       setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'COMPLETED':
+        return AppColors.success;
+      case 'FIXED':
+        return AppColors.info;
+      default:
+        return AppColors.danger;
     }
   }
 
@@ -70,60 +78,79 @@ class _StreminiAgentScreenState extends ConsumerState<StreminiAgentScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.black,
         elevation: 0,
-        title: Text('Stremini: GitHub Architect', style: AppTextStyles.h2),
+        title: Text('Stremini GitHub Coder Agent', style: AppTextStyles.h2),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios, color: AppColors.white),
           onPressed: () => Navigator.pop(context),
         ),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Autonomous Repository Debugger', style: AppTextStyles.subtitle1.copyWith(color: AppColors.scanCyan)),
-            const SizedBox(height: 24),
-            
+            AppContainer(
+              width: double.infinity,
+              padding: const EdgeInsets.all(18),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  AppColors.primary.withOpacity(0.26),
+                  AppColors.scanCyan.withOpacity(0.18),
+                ],
+              ),
+              border: BorderSide(color: AppColors.scanCyan.withOpacity(0.35)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Production-grade GitHub automation', style: AppTextStyles.h3),
+                  const SizedBox(height: 8),
+                  Text(
+                    'The agent follows the CONTINUE loop contract, tracks read files, and stops safely after server-defined limits.',
+                    style: AppTextStyles.body3.copyWith(color: AppColors.hintGray),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
             _buildInputField(
               controller: _ownerController,
-              label: 'GitHub Username',
-              hint: 'e.g. 983111',
+              label: 'Repository Owner',
+              hint: 'e.g. your-github-username',
               icon: Icons.person_outline,
             ),
-            const SizedBox(height: 16),
-            
+            const SizedBox(height: 14),
             _buildInputField(
               controller: _repoController,
               label: 'Repository Name',
-              hint: 'e.g. Streminiai-',
+              hint: 'e.g. your-repo-name',
               icon: Icons.folder_open_outlined,
             ),
-            const SizedBox(height: 16),
-            
+            const SizedBox(height: 14),
             _buildInputField(
               controller: _taskController,
-              label: 'Coding Task',
-              hint: 'e.g. Add a dark theme toggle or fix the API error',
+              label: 'Task for the Agent',
+              hint: 'e.g. Investigate API loop handling and push a robust fix',
               icon: Icons.code_outlined,
-              maxLines: 4,
+              maxLines: 5,
             ),
-            const SizedBox(height: 24),
-
+            const SizedBox(height: 18),
             if (_isLoading)
               const Center(
-                child: Column(
-                  children: [
-                    CircularProgressIndicator(color: AppColors.scanCyan),
-                    SizedBox(height: 16),
-                    Text('Agent is reasoning through the repo tree...', 
-                        style: TextStyle(color: AppColors.scanCyan, fontStyle: FontStyle.italic)),
-                  ],
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 20),
+                  child: Column(
+                    children: [
+                      CircularProgressIndicator(color: AppColors.scanCyan),
+                      SizedBox(height: 14),
+                      Text('Analyzing repository and executing task loop...', style: TextStyle(color: AppColors.scanCyan)),
+                    ],
+                  ),
                 ),
-              )
-            else if (_resultCode.isNotEmpty)
-              _buildCodeResult(),
-            
-            const SizedBox(height: 100), // Space for FAB
+              ),
+            if (_runResult != null) _buildResultPanel(_runResult!),
+            const SizedBox(height: 96),
           ],
         ),
       ),
@@ -131,8 +158,8 @@ class _StreminiAgentScreenState extends ConsumerState<StreminiAgentScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _isLoading ? null : _runAgent,
         backgroundColor: AppColors.scanCyan,
-        icon: const Icon(Icons.auto_fix_high),
-        label: const Text('Start Reasoning', style: TextStyle(fontWeight: FontWeight.bold)),
+        icon: const Icon(Icons.terminal),
+        label: const Text('Run Agent', style: TextStyle(fontWeight: FontWeight.bold)),
       ),
     );
   }
@@ -147,7 +174,7 @@ class _StreminiAgentScreenState extends ConsumerState<StreminiAgentScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: AppTextStyles.body2.copyWith(fontWeight: FontWeight.bold)),
+        Text(label, style: AppTextStyles.body2.copyWith(fontWeight: FontWeight.w700)),
         const SizedBox(height: 8),
         TextField(
           controller: controller,
@@ -173,40 +200,89 @@ class _StreminiAgentScreenState extends ConsumerState<StreminiAgentScreen> {
     );
   }
 
-  Widget _buildCodeResult() {
+  Widget _buildResultPanel(GithubAgentRunResult result) {
+    final statusColor = _statusColor(result.status);
+    final durationMs = result.duration.inMilliseconds;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Suggested Code Solution', style: AppTextStyles.h3),
-            IconButton(
-              icon: const Icon(Icons.copy_all, color: AppColors.scanCyan),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: _resultCode));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Code copied to clipboard!')),
-                );
-              },
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
         AppContainer(
           width: double.infinity,
-          color: AppColors.darkGray,
           padding: const EdgeInsets.all(16),
-          child: SelectableText(
-            _resultCode,
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              color: AppColors.white,
-              fontSize: 13,
-            ),
+          color: AppColors.darkGray,
+          border: BorderSide(color: statusColor.withOpacity(0.5)),
+          child: Wrap(
+            runSpacing: 8,
+            spacing: 8,
+            children: [
+              _buildMetricChip('Status: ${result.status}', statusColor),
+              _buildMetricChip('Iterations: ${result.iterationCount}', AppColors.info),
+              _buildMetricChip('Files read: ${result.visitedFiles.length}', AppColors.emotional),
+              _buildMetricChip('Duration: ${durationMs}ms', AppColors.warning),
+            ],
           ),
         ),
+        const SizedBox(height: 12),
+        _buildSectionHeader('Agent Output', result.summary),
+        const SizedBox(height: 10),
+        _buildCodeBox(result.summary),
+        if (result.rawPayload.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          _buildSectionHeader('Raw API Payload', 'Useful for debugging response contracts'),
+          const SizedBox(height: 10),
+          _buildCodeBox(result.rawPayload),
+        ],
       ],
+    );
+  }
+
+  Widget _buildMetricChip(String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(99),
+        color: color.withOpacity(0.16),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Text(value, style: const TextStyle(color: AppColors.white, fontWeight: FontWeight.w600)),
+    );
+  }
+
+  Widget _buildSectionHeader(String title, String subtitle) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: AppTextStyles.h3),
+        const SizedBox(height: 4),
+        Text(subtitle, style: AppTextStyles.body3.copyWith(color: AppColors.hintGray)),
+      ],
+    );
+  }
+
+  Widget _buildCodeBox(String text) {
+    return AppContainer(
+      width: double.infinity,
+      color: AppColors.darkGray,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.copy_all, color: AppColors.scanCyan),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: text));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied to clipboard.')),
+              );
+            },
+          ),
+          SelectableText(
+            text,
+            style: const TextStyle(fontFamily: 'monospace', color: AppColors.white, fontSize: 12.8),
+          ),
+        ],
+      ),
     );
   }
 }
