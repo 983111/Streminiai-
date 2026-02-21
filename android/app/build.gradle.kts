@@ -64,7 +64,10 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.11.0")
     implementation("org.json:json:20231013")
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("com.google.android.play:core:1.10.3")
+    // Play Core `com.google.android.play:core` is deprecated and blocked by Play Console.
+    // Use API-specific modern artifacts to stay Android 14+ compatible.
+    implementation("com.google.android.play:app-update:2.1.0")
+    implementation("com.google.android.play:review:2.0.2")
     implementation("androidx.cardview:cardview:1.0.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
 }

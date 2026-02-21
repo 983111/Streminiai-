@@ -10,7 +10,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     
-    <!-- Query for accessibility settings -->
+    <!-- Query for settings and supported process-text intents -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN"/>
@@ -21,13 +21,16 @@
         <intent>
             <action android:name="android.settings.INPUT_METHOD_SETTINGS"/>
         </intent>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
     </queries>
 
     <application
         android:label="Stremini Ai"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
-        android:requestLegacyExternalStorage="true"
         android:usesCleartextTraffic="false"
         android:allowBackup="false"
         android:supportsRtl="true"
@@ -110,11 +113,4 @@
             android:value="2" />
     </application>
 
-    <!-- Additional queries for better compatibility -->
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.PROCESS_TEXT"/>
-            <data android:mimeType="text/plain"/>
-        </intent>
-    </queries>
 </manifest>
