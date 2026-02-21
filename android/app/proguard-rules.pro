@@ -34,6 +34,10 @@
 -keep public class * extends android.app.Service
 -keep public class * extends android.content.BroadcastReceiver
 -keep public class * extends android.content.ContentProvider
+# Play Core modular migration: Flutter embedding can reference deferred-component classes
+# that may be absent when app does not ship Play deferred components.
+-dontwarn com.google.android.play.core.**
+
 # Keep Play Core classes
 -keep class com.google.android.play.core.** { *; }
 -keep class com.google.android.play.core.splitinstall.** { *; }
