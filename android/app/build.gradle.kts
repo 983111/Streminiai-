@@ -68,6 +68,7 @@ dependencies {
     // Use API-specific modern artifacts to stay Android 14+ compatible.
     // feature-delivery is required by Flutter deferred components (SplitCompat/SplitInstall classes).
     implementation("com.google.android.play:feature-delivery:2.1.0")
+    implementation("com.google.android.play:core-common:2.0.4")
     implementation("com.google.android.play:app-update:2.1.0")
     implementation("com.google.android.play:review:2.0.2")
     implementation("androidx.cardview:cardview:1.0.0")
