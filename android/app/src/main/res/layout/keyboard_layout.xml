@@ -159,6 +159,12 @@
                 style="@style/KeyboardSpecialKey"
                 android:text="🎤"
                 android:layout_weight="1"/>
+
+            <TextView
+                android:id="@+id/key_switch_keyboard"
+                style="@style/KeyboardSpecialKey"
+                android:text="🌐"
+                android:layout_weight="1"/>
             
             <TextView
                 android:id="@+id/key_space"

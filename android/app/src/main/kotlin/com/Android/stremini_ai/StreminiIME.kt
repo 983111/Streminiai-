@@ -11,6 +11,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.DecelerateInterpolator
 import android.widget.TextView
@@ -128,6 +129,22 @@ class StreminiIME : InputMethodService() {
             } else if (event.action == MotionEvent.ACTION_UP) {
                 animateKey(v, false)
                 handleEnterKey()
+            }
+            true
+        }
+
+        // Keyboard Switcher (Globe key)
+        view.findViewById<View>(R.id.key_switch_keyboard)?.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    feedback(v)
+                    animateKey(v, true)
+                }
+                MotionEvent.ACTION_UP -> {
+                    animateKey(v, false)
+                    showKeyboardPicker()
+                }
+                MotionEvent.ACTION_CANCEL -> animateKey(v, false)
             }
             true
         }
@@ -374,6 +391,11 @@ class StreminiIME : InputMethodService() {
             feedback(it)
             handleAiAction(action) 
         }
+    }
+
+    private fun showKeyboardPicker() {
+        val imeManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        imeManager.showInputMethodPicker()
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
