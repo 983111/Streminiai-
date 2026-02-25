@@ -6,9 +6,6 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_container.dart';
 import '../../core/widgets/app_drawer.dart';
-import '../../core/widgets/feature_card.dart';
-import '../../core/widgets/permission_card.dart';
-import '../../core/widgets/info_step.dart';
 import '../../controllers/home_controller.dart';
 import '../../services/keyboard_service.dart';
 import '../chat_screen.dart';
@@ -58,116 +55,507 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     return Scaffold(
       backgroundColor: AppColors.black,
       drawer: _buildDrawer(context),
-      appBar: _buildAppBar(context),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildGreetingCard(context),
-            const SizedBox(height: 24),
-
-            // ── GitHub Agent hero banner ──────────────────────────────
-            _buildAgentHeroBanner(context),
-            const SizedBox(height: 28),
-
-            Text('All Features', style: AppTextStyles.h2),
-            const SizedBox(height: 16),
-
-            _buildSmartChatbotCard(context, state, controller),
-            const SizedBox(height: 16),
-
-            _buildDocumentChatCard(context),
-            const SizedBox(height: 16),
-
-            keyboardStatus.when(
-              data: (status) => _buildKeyboardCard(context, status),
-              loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
-            ),
-            const SizedBox(height: 16),
-
-            _buildInfoCard(),
-            const SizedBox(height: 32),
-
-            if (!state.permissionStatus.hasAll) ...[
-              Text('Required Permissions', style: AppTextStyles.h3),
-              const SizedBox(height: 12),
-              if (state.permissionStatus.needsOverlay)
-                PermissionCard(
-                  title: 'Overlay Permission',
-                  description: 'Required for floating bubble over other apps',
-                  icon: Icons.bubble_chart,
-                  color: AppColors.warning,
-                  onTap: () => controller.requestOverlayPermission(),
-                ),
-              if (state.permissionStatus.needsAccessibility)
-                PermissionCard(
-                  title: 'Accessibility Permission',
-                  description: 'Required for screen scanner to detect scams',
-                  icon: Icons.accessibility_new,
-                  color: AppColors.emotional,
-                  onTap: () => controller.requestAccessibilityPermission(),
-                ),
-              if (state.permissionStatus.needsMicrophone)
-                PermissionCard(
-                  title: 'Microphone Permission',
-                  description: 'Required for Auto Tasker voice commands',
-                  icon: Icons.mic,
-                  color: AppColors.info,
-                  onTap: () => controller.requestMicrophonePermission(),
-                ),
-              const SizedBox(height: 16),
-              AppContainer(
-                padding: const EdgeInsets.all(16),
-                color: AppColors.info.withOpacity(0.1),
-                border: BorderSide(color: AppColors.info.withOpacity(0.3)),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline,
-                        color: AppColors.info, size: 24),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Overlay, Accessibility, and Microphone permissions are required for all AI tools to work properly',
-                        style: AppTextStyles.body3
-                            .copyWith(color: AppColors.info),
-                      ),
-                    ),
-                  ],
-                ),
+      body: CustomScrollView(
+        slivers: [
+          // Custom App Bar with logo
+          SliverAppBar(
+            backgroundColor: AppColors.black,
+            elevation: 0,
+            floating: true,
+            pinned: true,
+            leading: Builder(
+              builder: (context) => IconButton(
+                icon: const Icon(Icons.menu, color: AppColors.white),
+                onPressed: () => Scaffold.of(context).openDrawer(),
               ),
-            ],
-            const SizedBox(height: 20),
-          ],
-        ),
+            ),
+            title: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Image.asset(AppAssets.logo,
+                    width: 32, height: 32, fit: BoxFit.contain),
+                const SizedBox(width: 12),
+                Text('Stremini', style: AppTextStyles.h2),
+              ],
+            ),
+            centerTitle: true,
+            actions: const [SizedBox(width: 48)],
+          ),
+
+          // Content
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 20),
+                  
+                  // Main title section
+                  _buildMainTitle(),
+                  const SizedBox(height: 32),
+
+                  // Floating AI Agent Banner (Matching screenshot)
+                  _buildFloatingAgentBanner(state, controller),
+                  const SizedBox(height: 32),
+
+                  // System Access Section
+                  _buildSectionTitle('SYSTEM ACCESS'),
+                  const SizedBox(height: 16),
+                  _buildSystemAccessCards(state, controller),
+                  const SizedBox(height: 32),
+
+                  // Active Modules Section
+                  _buildSectionTitle('ACTIVE MODULES'),
+                  const SizedBox(height: 16),
+                  _buildModulesGrid(context, state, controller, keyboardStatus),
+                  const SizedBox(height: 32),
+
+                  // Permissions if needed
+                  if (!state.permissionStatus.hasAll) ...[
+                    _buildSectionTitle('REQUIRED PERMISSIONS'),
+                    const SizedBox(height: 16),
+                    _buildPermissionsSection(state, controller),
+                    const SizedBox(height: 32),
+                  ],
+
+                  const SizedBox(height: 40),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // ── App bar ───────────────────────────────────────────────────────────────
-  PreferredSizeWidget _buildAppBar(BuildContext context) {
-    return AppBar(
-      backgroundColor: AppColors.black,
-      elevation: 0,
-      leading: Builder(
-        builder: (context) => IconButton(
-          icon: const Icon(Icons.menu, color: AppColors.white),
-          onPressed: () => Scaffold.of(context).openDrawer(),
+  // ── Main Title ────────────────────────────────────────────────────────────
+  Widget _buildMainTitle() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Stremini',
+          style: AppTextStyles.h1.copyWith(
+            fontSize: 32,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -1,
+          ),
         ),
+        const SizedBox(height: 4),
+        Text(
+          'Autonomous AI',
+          style: AppTextStyles.body2.copyWith(
+            color: AppColors.primary,
+            fontSize: 16,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Section Title ─────────────────────────────────────────────────────────
+  Widget _buildSectionTitle(String title) {
+    return Text(
+      title,
+      style: AppTextStyles.body3.copyWith(
+        color: AppColors.textGray,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.2,
       ),
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Image.asset(AppAssets.logo,
-              width: 32, height: 32, fit: BoxFit.contain),
-          const SizedBox(width: 12),
-          Text(AppConstants.appName, style: AppTextStyles.h2),
+    );
+  }
+
+  // ── Floating AI Agent Banner (Main CTA - Matching Screenshot) ────────────
+  Widget _buildFloatingAgentBanner(HomeState state, HomeController controller) {
+    return AppContainer(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          const Color(0xFF0D2137),
+          AppColors.primary.withOpacity(0.15),
         ],
       ),
-      centerTitle: true,
-      actions: const [SizedBox(width: 48)],
+      border: BorderSide(color: AppColors.primary.withOpacity(0.4)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.primary.withOpacity(0.3),
+                      AppColors.scanCyan.withOpacity(0.2),
+                    ],
+                  ),
+                  border: Border.all(color: AppColors.primary.withOpacity(0.5)),
+                ),
+                child: const Icon(Icons.auto_awesome,
+                    color: AppColors.primary, size: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Floating AI Agent',
+                      style: AppTextStyles.h3.copyWith(fontSize: 18),
+                    ),
+                    Text(
+                      'Tap to activate system-wide assistant',
+                      style: AppTextStyles.subtitle1.copyWith(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: state.bubbleActive
+                      ? AppColors.primary
+                      : AppColors.mediumGray,
+                  boxShadow: state.bubbleActive
+                      ? [
+                          BoxShadow(
+                            color: AppColors.primary.withOpacity(0.4),
+                            blurRadius: 12,
+                            spreadRadius: 2,
+                          )
+                        ]
+                      : null,
+                ),
+                child: state.isLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation(AppColors.white),
+                        ),
+                      )
+                    : IconButton(
+                        icon: Icon(
+                          state.bubbleActive ? Icons.power_settings_new : Icons.power_settings_new_outlined,
+                          color: AppColors.white,
+                          size: 24,
+                        ),
+                        onPressed: state.isLoading
+                            ? null
+                            : () async {
+                                final success = await controller
+                                    .toggleBubble(!state.bubbleActive);
+                                if (!success && mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content:
+                                          Text('Please grant permissions first'),
+                                      backgroundColor: AppColors.warning,
+                                    ),
+                                  );
+                                } else if (success && mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(state.bubbleActive
+                                          ? 'Floating AI activated!'
+                                          : 'Floating AI deactivated'),
+                                      backgroundColor: state.bubbleActive
+                                          ? AppColors.success
+                                          : AppColors.lightGray,
+                                    ),
+                                  );
+                                }
+                              },
+                      ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── System Access Cards ───────────────────────────────────────────────────
+  Widget _buildSystemAccessCards(HomeState state, HomeController controller) {
+    return Column(
+      children: [
+        _buildSystemAccessCard(
+          'Screen Overlay',
+          'Required for floating widget',
+          Icons.layers,
+          state.permissionStatus.hasOverlay,
+          () => controller.requestOverlayPermission(),
+        ),
+        const SizedBox(height: 12),
+        _buildSystemAccessCard(
+          'Accessibility',
+          'Allows AI to read screen context',
+          Icons.accessibility_new,
+          state.permissionStatus.hasAccessibility,
+          () => controller.requestAccessibilityPermission(),
+        ),
+        const SizedBox(height: 12),
+        _buildSystemAccessCard(
+          'Notifications',
+          'Receive background agent updates',
+          Icons.notifications,
+          true, // Notifications are usually granted by default
+          () {},
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSystemAccessCard(
+    String title,
+    String description,
+    IconData icon,
+    bool isEnabled,
+    VoidCallback onTap,
+  ) {
+    return AppContainer(
+      padding: const EdgeInsets.all(16),
+      color: AppColors.darkGray,
+      border: BorderSide(
+        color: isEnabled
+            ? AppColors.primary.withOpacity(0.4)
+            : AppColors.lightGray.withOpacity(0.2),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: isEnabled
+                  ? AppColors.primary.withOpacity(0.2)
+                  : AppColors.lightGray.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(
+              icon,
+              color: isEnabled ? AppColors.primary : AppColors.lightGray,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: AppTextStyles.body2),
+                Text(description, style: AppTextStyles.subtitle2),
+              ],
+            ),
+          ),
+          if (!isEnabled)
+            TextButton(
+              onPressed: onTap,
+              style: TextButton.styleFrom(
+                backgroundColor: AppColors.primary.withOpacity(0.2),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              ),
+              child: Text(
+                'Enable',
+                style: AppTextStyles.button.copyWith(color: AppColors.primary),
+              ),
+            )
+          else
+            Icon(Icons.check_circle, color: AppColors.success, size: 24),
+        ],
+      ),
+    );
+  }
+
+  // ── Active Modules Grid ───────────────────────────────────────────────────
+  Widget _buildModulesGrid(
+    BuildContext context,
+    HomeState state,
+    HomeController controller,
+    AsyncValue<KeyboardStatus> keyboardStatus,
+  ) {
+    return Row(
+      children: [
+        Expanded(
+          child: _buildModuleCard(
+            'GitHub Agent',
+            'Autonomous code ops',
+            Icons.integration_instructions,
+            AppColors.scanCyan,
+            () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (context) => const StreminiAgentScreen()),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: keyboardStatus.when(
+            data: (status) => _buildModuleCard(
+              'AI Keyboard',
+              'Smart typing assist',
+              Icons.keyboard,
+              AppColors.secondary,
+              () => ref
+                  .read(keyboardServiceProvider)
+                  .openKeyboardSettingsActivity(),
+            ),
+            loading: () => _buildModuleCard(
+              'AI Keyboard',
+              'Smart typing assist',
+              Icons.keyboard,
+              AppColors.secondary,
+              () {},
+            ),
+            error: (_, __) => _buildModuleCard(
+              'AI Keyboard',
+              'Smart typing assist',
+              Icons.keyboard,
+              AppColors.secondary,
+              () {},
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildModuleCard(
+    String title,
+    String description,
+    IconData icon,
+    Color color,
+    VoidCallback onTap,
+  ) {
+    return AppContainer(
+      padding: const EdgeInsets.all(16),
+      color: AppColors.darkGray,
+      border: BorderSide(color: color.withOpacity(0.3)),
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: AppTextStyles.body2.copyWith(fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            description,
+            style: AppTextStyles.subtitle2,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Permissions Section ───────────────────────────────────────────────────
+  Widget _buildPermissionsSection(HomeState state, HomeController controller) {
+    return Column(
+      children: [
+        if (state.permissionStatus.needsOverlay)
+          _buildPermissionCard(
+            'Overlay Permission',
+            'Required for floating bubble over other apps',
+            Icons.bubble_chart,
+            AppColors.warning,
+            () => controller.requestOverlayPermission(),
+          ),
+        if (state.permissionStatus.needsAccessibility) ...[
+          if (state.permissionStatus.needsOverlay) const SizedBox(height: 12),
+          _buildPermissionCard(
+            'Accessibility Permission',
+            'Required for screen scanner to detect scams',
+            Icons.accessibility_new,
+            AppColors.emotional,
+            () => controller.requestAccessibilityPermission(),
+          ),
+        ],
+        if (state.permissionStatus.needsMicrophone) ...[
+          if (state.permissionStatus.needsOverlay ||
+              state.permissionStatus.needsAccessibility)
+            const SizedBox(height: 12),
+          _buildPermissionCard(
+            'Microphone Permission',
+            'Required for Auto Tasker voice commands',
+            Icons.mic,
+            AppColors.info,
+            () => controller.requestMicrophonePermission(),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildPermissionCard(
+    String title,
+    String description,
+    IconData icon,
+    Color color,
+    VoidCallback onTap,
+  ) {
+    return AppContainer(
+      padding: const EdgeInsets.all(16),
+      color: color.withOpacity(0.1),
+      border: BorderSide(color: color.withOpacity(0.3)),
+      child: Row(
+        children: [
+          Icon(icon, color: color, size: 28),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: AppTextStyles.body2.copyWith(
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(description, style: AppTextStyles.subtitle2),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onTap,
+            style: TextButton.styleFrom(
+              backgroundColor: color.withOpacity(0.2),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            ),
+            child: Text(
+              'Enable',
+              style: AppTextStyles.button.copyWith(color: color),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -199,8 +587,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             Navigator.pop(context);
             Navigator.push(
               context,
-              MaterialPageRoute(
-                  builder: (context) => const ChatScreen()),
+              MaterialPageRoute(builder: (context) => const ChatScreen()),
             );
           },
         ),
@@ -209,9 +596,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           title: 'AI Keyboard',
           onTap: () {
             Navigator.pop(context);
-            ref
-                .read(keyboardServiceProvider)
-                .openKeyboardSettingsActivity();
+            ref.read(keyboardServiceProvider).openKeyboardSettingsActivity();
           },
         ),
         AppDrawerItem(
@@ -226,487 +611,5 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
       ],
     );
-  }
-
-  // ── Greeting card ─────────────────────────────────────────────────────────
-  Widget _buildGreetingCard(BuildContext context) {
-    return AppContainer(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      gradient: LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          AppColors.primary.withOpacity(0.2),
-          AppColors.secondary.withOpacity(0.2),
-        ],
-      ),
-      border: BorderSide(color: AppColors.info.withOpacity(0.3)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(_getGreeting(), style: AppTextStyles.h1),
-              const Spacer(),
-              AppContainer(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 12, vertical: 6),
-                color: AppColors.white.withOpacity(0.1),
-                borderRadius: 20,
-                border: BorderSide(
-                    color: AppColors.white.withOpacity(0.2)),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                      builder: (context) => const ChatScreen()),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.touch_app,
-                        color: AppColors.info.withOpacity(0.8),
-                        size: 16),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Quick Chat',
-                      style: AppTextStyles.body3.copyWith(
-                        color: AppColors.info.withOpacity(0.8),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Autonomous AI reasoning engine at your service.',
-            style: AppTextStyles.subtitle1,
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── GitHub Agent hero banner ──────────────────────────────────────────────
-  // Full-width, eye-catching banner — the main call-to-action on the home screen.
-  Widget _buildAgentHeroBanner(BuildContext context) {
-    return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(
-            builder: (context) => const StreminiAgentScreen()),
-      ),
-      child: Container(
-        width: double.infinity,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              const Color(0xFF0D2137),
-              AppColors.scanCyan.withOpacity(0.18),
-              const Color(0xFF0D1B2A),
-            ],
-          ),
-          border: Border.all(
-              color: AppColors.scanCyan.withOpacity(0.5), width: 1.5),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.scanCyan.withOpacity(0.12),
-              blurRadius: 24,
-              spreadRadius: 2,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            // Decorative glow orb (top-right)
-            Positioned(
-              top: -20,
-              right: -20,
-              child: Container(
-                width: 120,
-                height: 120,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.scanCyan.withOpacity(0.07),
-                ),
-              ),
-            ),
-            // Decorative glow orb (bottom-left)
-            Positioned(
-              bottom: -30,
-              left: -10,
-              child: Container(
-                width: 90,
-                height: 90,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.primary.withOpacity(0.08),
-                ),
-              ),
-            ),
-
-            // Content
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Tag pill
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.scanCyan.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(99),
-                      border: Border.all(
-                          color: AppColors.scanCyan.withOpacity(0.4)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Container(
-                          width: 6,
-                          height: 6,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: AppColors.scanCyan,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'Engine Ready',
-                          style: AppTextStyles.body3.copyWith(
-                            color: AppColors.scanCyan,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.4,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 14),
-
-                  // Title row
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Stremini',
-                              style: AppTextStyles.h1.copyWith(
-                                color: AppColors.white,
-                                fontSize: 26,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: -0.5,
-                              ),
-                            ),
-                            Text(
-                              'GitHub Architect',
-                              style: AppTextStyles.h1.copyWith(
-                                color: AppColors.scanCyan,
-                                fontSize: 26,
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: -0.5,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      // Icon box
-                      Container(
-                        width: 56,
-                        height: 56,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(16),
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              AppColors.scanCyan.withOpacity(0.3),
-                              AppColors.primary.withOpacity(0.3),
-                            ],
-                          ),
-                          border: Border.all(
-                              color: AppColors.scanCyan.withOpacity(0.5)),
-                        ),
-                        child: const Icon(Icons.auto_awesome,
-                            color: AppColors.scanCyan, size: 28),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 12),
-
-                  Text(
-                    'Reads your repo, writes the fix, pushes to GitHub — fully autonomous.',
-                    style: AppTextStyles.body2
-                        .copyWith(color: Colors.white70, height: 1.4),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Capability chips row
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _buildCapChip(
-                          Icons.account_tree_outlined, 'Repo Reasoning'),
-                      _buildCapChip(Icons.bug_report_outlined, 'Debug Loop'),
-                      _buildCapChip(Icons.code, 'Code Synthesis'),
-                      _buildCapChip(
-                          Icons.upload_outlined, 'Auto Push'),
-                    ],
-                  ),
-
-                  const SizedBox(height: 20),
-
-                  // CTA button
-                  Container(
-                    width: double.infinity,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(14),
-                      gradient: const LinearGradient(
-                        colors: [AppColors.scanCyan, AppColors.primary],
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: AppColors.scanCyan.withOpacity(0.3),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.terminal,
-                            color: AppColors.white, size: 20),
-                        const SizedBox(width: 10),
-                        Text(
-                          'Launch Agent',
-                          style: AppTextStyles.button.copyWith(
-                            fontSize: 15,
-                            letterSpacing: 0.3,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        const Icon(Icons.arrow_forward_ios,
-                            color: AppColors.white, size: 14),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCapChip(IconData icon, String label) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.white.withOpacity(0.06),
-        borderRadius: BorderRadius.circular(99),
-        border: Border.all(color: AppColors.white.withOpacity(0.12)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: AppColors.scanCyan, size: 13),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: AppTextStyles.body3.copyWith(
-              color: Colors.white70,
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Smart Chatbot card ────────────────────────────────────────────────────
-  Widget _buildSmartChatbotCard(
-    BuildContext context,
-    HomeState state,
-    HomeController controller,
-  ) {
-    return FeatureCard(
-      title: 'Smart Chatbot & Scam Detector',
-      description: 'Floating AI assistant with real-time screen analyzer',
-      icon: Icons.chat_bubble_outline,
-      iconColor: AppColors.primary,
-      status: state.bubbleActive ? 'Active' : 'Inactive',
-      statusColor:
-          state.bubbleActive ? AppColors.success : AppColors.lightGray,
-      badges: const ['Floating Chat', 'Screen Scanner', 'Scam Detection'],
-      trailing: state.isLoading
-          ? const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                valueColor:
-                    AlwaysStoppedAnimation(AppColors.primary),
-              ),
-            )
-          : Switch(
-              value: state.bubbleActive,
-              onChanged: state.isLoading
-                  ? null
-                  : (value) async {
-                      final success =
-                          await controller.toggleBubble(value);
-                      if (!success && mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content:
-                                Text('Please grant permissions first'),
-                            backgroundColor: AppColors.warning,
-                          ),
-                        );
-                      } else if (success && mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(value
-                                ? 'Floating bubble activated!'
-                                : 'Floating bubble deactivated'),
-                            backgroundColor: value
-                                ? AppColors.success
-                                : AppColors.lightGray,
-                          ),
-                        );
-                      }
-                    },
-              activeColor: AppColors.primary,
-            ),
-    );
-  }
-
-  // ── Document Chat card ────────────────────────────────────────────────────
-  Widget _buildDocumentChatCard(BuildContext context) {
-    return FeatureCard(
-      title: 'Document Chat',
-      description: 'Upload a PDF or text file and ask questions about it',
-      icon: Icons.picture_as_pdf_outlined,
-      iconColor: AppColors.secondary,
-      status: 'Ready',
-      statusColor: AppColors.success,
-      badges: const ['PDF', 'TXT / MD', 'Q&A', 'Multi-chunk'],
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const ChatScreen()),
-      ),
-      trailing: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: AppColors.secondary.withOpacity(0.15),
-          border: Border.all(
-              color: AppColors.secondary.withOpacity(0.4)),
-        ),
-        child: const Icon(Icons.arrow_forward_ios,
-            color: AppColors.secondary, size: 14),
-      ),
-    );
-  }
-
-  // ── AI Keyboard card ──────────────────────────────────────────────────────
-  Widget _buildKeyboardCard(BuildContext context, KeyboardStatus status) {
-    final keyboardService = ref.read(keyboardServiceProvider);
-    return FeatureCard(
-      title: 'AI-Powered Keyboard',
-      description:
-          'Smart typing with translation, completion & enhancement',
-      icon: Icons.keyboard,
-      iconColor: AppColors.secondary,
-      status: status.isActive
-          ? 'Active'
-          : status.isEnabled
-              ? 'Enabled'
-              : 'Disabled',
-      statusColor: status.isActive
-          ? AppColors.success
-          : status.isEnabled
-              ? AppColors.warning
-              : AppColors.lightGray,
-      badges: const ['Translate', 'Complete', 'Enhance', 'Emoji'],
-      trailing: IconButton(
-        icon: const Icon(Icons.settings, color: AppColors.secondary),
-        onPressed: () => keyboardService.openKeyboardSettingsActivity(),
-      ),
-      onTap: () {
-        if (!status.isEnabled) {
-          keyboardService.openKeyboardSettings();
-        } else if (!status.isSelected) {
-          keyboardService.showKeyboardPicker();
-        } else {
-          keyboardService.openKeyboardSettingsActivity();
-        }
-      },
-    );
-  }
-
-  // ── Info card ─────────────────────────────────────────────────────────────
-  Widget _buildInfoCard() {
-    return AppContainer(
-      padding: const EdgeInsets.all(16),
-      border: BorderSide(color: AppColors.scanCyan.withOpacity(0.3)),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.info_outline,
-                  color: AppColors.scanCyan, size: 24),
-              const SizedBox(width: 12),
-              Text('How to use:',
-                  style: AppTextStyles.body2
-                      .copyWith(fontWeight: FontWeight.bold)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          const InfoStep(
-              number: '1', text: 'Grant all required permissions'),
-          const InfoStep(
-              number: '2',
-              text: 'Tap "Launch Agent" to debug & fix a GitHub repo autonomously',
-              color: AppColors.scanCyan),
-          const InfoStep(
-              number: '3', text: 'Toggle Smart Chatbot for floating overlay'),
-          const InfoStep(
-              number: '4',
-              text: 'Use Document Chat to upload a PDF and ask questions'),
-          const InfoStep(
-              number: '5',
-              text: 'Enable AI Keyboard for smart typing',
-              color: AppColors.secondary),
-        ],
-      ),
-    );
-  }
-
-  String _getGreeting() {
-    final hour = DateTime.now().hour;
-    if (hour < 12) return 'Good morning! 👋';
-    if (hour < 18) return 'Good afternoon! 👋';
-    return 'Good evening! 👋';
   }
 }
