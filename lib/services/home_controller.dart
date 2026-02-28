@@ -15,6 +15,7 @@ class HomeState {
     this.permissionStatus = const PermissionStatus(
       hasOverlay: false,
       hasAccessibility: false,
+      hasMicrophone: false,
     ),
     this.errorMessage,
   });

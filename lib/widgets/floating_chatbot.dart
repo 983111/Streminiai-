@@ -3,7 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
 
 // State provider for floating chatbot
-final floatingChatbotProvider = NotifierProvider<FloatingChatbotNotifier, FloatingChatbotState>(
+final floatingChatbotProvider =
+    NotifierProvider<FloatingChatbotNotifier, FloatingChatbotState>(
   FloatingChatbotNotifier.new,
 );
 
@@ -178,8 +179,10 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
         onPanUpdate: (details) {
           notifier.updatePosition(
             Offset(
-              (state.position.dx + details.delta.dx).clamp(0, screenSize.width - 320),
-              (state.position.dy + details.delta.dy).clamp(0, screenSize.height - 400),
+              (state.position.dx + details.delta.dx)
+                  .clamp(0, screenSize.width - 320),
+              (state.position.dy + details.delta.dy)
+                  .clamp(0, screenSize.height - 400),
             ),
           );
         },
@@ -190,7 +193,7 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
             width: 320,
             height: 400,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.95),
+              color: Colors.black.withValues(alpha: 0.95),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: Colors.blue, width: 2),
             ),
@@ -216,7 +219,7 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.blue.withOpacity(0.2),
+        color: Colors.blue.withValues(alpha: 0.2),
         borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
       ),
       child: Row(
@@ -281,7 +284,8 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
 
         final message = state.messages[index];
         return Align(
-          alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
+          alignment:
+              message.isUser ? Alignment.centerRight : Alignment.centerLeft,
           child: Container(
             margin: const EdgeInsets.only(bottom: 8),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -349,7 +353,7 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
     final state = ref.watch(floatingChatbotProvider);
 
     return Material(
-      color: Colors.black.withOpacity(0.95),
+      color: Colors.black.withValues(alpha: 0.95),
       child: SafeArea(
         child: Column(
           children: [
@@ -370,7 +374,8 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
                   ),
                   const Spacer(),
                   IconButton(
-                    icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
+                    icon:
+                        const Icon(Icons.fullscreen_exit, color: Colors.white),
                     onPressed: () => notifier.toggleFullscreen(),
                   ),
                   IconButton(

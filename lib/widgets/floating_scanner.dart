@@ -4,7 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/api_service.dart';
 
 // State provider for floating scanner
-final floatingScannerProvider = NotifierProvider<FloatingScannerNotifier, FloatingScannerState>(
+final floatingScannerProvider =
+    NotifierProvider<FloatingScannerNotifier, FloatingScannerState>(
   FloatingScannerNotifier.new,
 );
 
@@ -59,15 +60,17 @@ class FloatingScannerNotifier extends Notifier<FloatingScannerState> {
 
   Future<void> _startScreenScan() async {
     state = state.copyWith(isScanning: true);
-    
+
     try {
       // Check if accessibility permission is granted
-      final bool? hasPermission = await _channel.invokeMethod<bool>('hasAccessibilityPermission');
-      
+      final bool? hasPermission =
+          await _channel.invokeMethod<bool>('hasAccessibilityPermission');
+
       if (hasPermission != true) {
         state = state.copyWith(
           isScanning: false,
-          error: 'Accessibility permission is required. Please enable it in settings.',
+          error:
+              'Accessibility permission is required. Please enable it in settings.',
         );
         return;
       }
@@ -84,11 +87,11 @@ class FloatingScannerNotifier extends Notifier<FloatingScannerState> {
 
   Future<void> processScanResult(String scannedText) async {
     state = state.copyWith(scannedText: scannedText);
-    
+
     try {
       final apiService = ref.read(apiServiceProvider);
       final result = await apiService.scanContent(scannedText);
-      
+
       state = state.copyWith(
         isScanning: false,
         scanResult: result,
@@ -118,7 +121,7 @@ class FloatingScanner extends ConsumerWidget {
     if (!state.isVisible) return const SizedBox.shrink();
 
     return Material(
-      color: Colors.black.withOpacity(0.95),
+      color: Colors.black.withValues(alpha: 0.95),
       child: SafeArea(
         child: Stack(
           children: [
@@ -127,14 +130,14 @@ class FloatingScanner extends ConsumerWidget {
               children: [
                 // Header
                 _buildHeader(notifier),
-                
+
                 // Content
                 Expanded(
                   child: _buildContent(state, notifier, context),
                 ),
               ],
             ),
-            
+
             // Close button
             Positioned(
               top: 16,
@@ -159,7 +162,7 @@ class FloatingScanner extends ConsumerWidget {
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: Colors.purple.withOpacity(0.2),
+              color: Colors.purple.withValues(alpha: 0.2),
               borderRadius: BorderRadius.circular(12),
             ),
             child: const Icon(Icons.scanner, color: Colors.purple),
@@ -190,7 +193,8 @@ class FloatingScanner extends ConsumerWidget {
     );
   }
 
-  Widget _buildContent(FloatingScannerState state, FloatingScannerNotifier notifier, BuildContext context) {
+  Widget _buildContent(FloatingScannerState state,
+      FloatingScannerNotifier notifier, BuildContext context) {
     if (state.error != null) {
       return _buildError(state.error!, notifier, context);
     }
@@ -250,7 +254,8 @@ class FloatingScanner extends ConsumerWidget {
     );
   }
 
-  Widget _buildError(String error, FloatingScannerNotifier notifier, BuildContext context) {
+  Widget _buildError(
+      String error, FloatingScannerNotifier notifier, BuildContext context) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -275,7 +280,8 @@ class FloatingScanner extends ConsumerWidget {
                 label: const Text('Open Settings'),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.purple,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
               )
             else
@@ -283,7 +289,8 @@ class FloatingScanner extends ConsumerWidget {
                 onPressed: () => notifier.clearError(),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.purple,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
                 ),
                 child: const Text('Try Again'),
               ),
@@ -294,11 +301,16 @@ class FloatingScanner extends ConsumerWidget {
   }
 
   Widget _buildResults(SecurityScanResult result) {
-    final bool isSafe = result.riskLevel != 'danger' && result.riskLevel != 'warning';
-    final Color bannerStart = isSafe ? const Color(0xFF1A3826) : const Color(0xFF38261A);
-    final Color bannerEnd = isSafe ? const Color(0xFF0F251B) : const Color(0xFF251B0F);
-    final Color bannerBorder = isSafe ? const Color(0xFF2D5C43) : const Color(0xFF5C432D);
-    final Color iconColor = isSafe ? const Color(0xFF6DD58C) : const Color(0xFFFFD580);
+    final bool isSafe =
+        result.riskLevel != 'danger' && result.riskLevel != 'warning';
+    final Color bannerStart =
+        isSafe ? const Color(0xFF1A3826) : const Color(0xFF38261A);
+    final Color bannerEnd =
+        isSafe ? const Color(0xFF0F251B) : const Color(0xFF251B0F);
+    final Color bannerBorder =
+        isSafe ? const Color(0xFF2D5C43) : const Color(0xFF5C432D);
+    final Color iconColor =
+        isSafe ? const Color(0xFF6DD58C) : const Color(0xFFFFD580);
     final Color titleColor = Colors.white;
     final Color subTextColor = Colors.white70;
 
@@ -332,7 +344,9 @@ class FloatingScanner extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        result.isSafe ? 'Safe: No Threat Detected' : 'Warning: Potential Threats',
+                        result.isSafe
+                            ? 'Safe: No Threat Detected'
+                            : 'Warning: Potential Threats',
                         style: TextStyle(
                           color: titleColor,
                           fontSize: 16,
@@ -372,7 +386,8 @@ class FloatingScanner extends ConsumerWidget {
               children: result.tags.map((tag) {
                 final label = tag.trim().toLowerCase();
                 final isTagSafe = label == 'safe';
-                final isDangerous = label == 'scam' || label == 'danger' || label == 'threat';
+                final isDangerous =
+                    label == 'scam' || label == 'danger' || label == 'threat';
                 final Color backgroundColor = isTagSafe
                     ? const Color(0xFF0F291E)
                     : isDangerous
@@ -388,11 +403,14 @@ class FloatingScanner extends ConsumerWidget {
                     : isDangerous
                         ? const Color(0xFFFF8080)
                         : const Color(0xFFFFD580);
-                final IconData icon = isTagSafe ? Icons.shield_outlined : Icons.shield;
-                final String tagText = isTagSafe ? 'Safe: No Threat Detected' : tag;
+                final IconData icon =
+                    isTagSafe ? Icons.shield_outlined : Icons.shield;
+                final String tagText =
+                    isTagSafe ? 'Safe: No Threat Detected' : tag;
 
                 return Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
                     color: backgroundColor,
                     borderRadius: BorderRadius.circular(999),
@@ -405,7 +423,10 @@ class FloatingScanner extends ConsumerWidget {
                       const SizedBox(width: 4),
                       Text(
                         tagText,
-                        style: TextStyle(color: textColor, fontSize: 12, fontWeight: FontWeight.w600),
+                        style: TextStyle(
+                            color: textColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600),
                       ),
                     ],
                   ),
@@ -433,7 +454,8 @@ class FloatingScanner extends ConsumerWidget {
             ),
             child: Text(
               result.analysis,
-              style: const TextStyle(color: Colors.white, fontSize: 14, height: 1.5),
+              style: const TextStyle(
+                  color: Colors.white, fontSize: 14, height: 1.5),
             ),
           ),
         ],

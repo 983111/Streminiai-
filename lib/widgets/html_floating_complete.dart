@@ -156,10 +156,10 @@ class HtmlFloatingNotifier extends Notifier<HtmlFloatingState> {
     try {
       // Simulate scanning duration
       await Future.delayed(const Duration(seconds: 2));
-      
+
       // Demo scan results - In production, this comes from ScreenScannerService
       final demoTags = _generateDemoScanTags();
-      
+
       state = state.copyWith(
         scanning: false,
         scanTags: demoTags,
@@ -248,7 +248,8 @@ class HtmlFloatingNotifier extends Notifier<HtmlFloatingState> {
 // ========================================
 // PROVIDER
 // ========================================
-final htmlFloatingProvider = NotifierProvider<HtmlFloatingNotifier, HtmlFloatingState>(
+final htmlFloatingProvider =
+    NotifierProvider<HtmlFloatingNotifier, HtmlFloatingState>(
   HtmlFloatingNotifier.new,
 );
 
@@ -265,8 +266,8 @@ class GradientRingPainter extends CustomPainter {
     final glowPaint = Paint()
       ..shader = RadialGradient(
         colors: [
-          const Color(0xFF23A6E2).withOpacity(0.5),
-          const Color(0xFFAA75F4).withOpacity(0.3),
+          const Color(0xFF23A6E2).withValues(alpha: 0.5),
+          const Color(0xFFAA75F4).withValues(alpha: 0.3),
           Colors.transparent,
         ],
       ).createShader(Rect.fromCircle(center: center, radius: radius));
@@ -304,7 +305,8 @@ class HtmlStyleFloatingChat extends ConsumerStatefulWidget {
   const HtmlStyleFloatingChat({super.key});
 
   @override
-  ConsumerState<HtmlStyleFloatingChat> createState() => _HtmlStyleFloatingChatState();
+  ConsumerState<HtmlStyleFloatingChat> createState() =>
+      _HtmlStyleFloatingChatState();
 }
 
 class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
@@ -336,7 +338,8 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat();
-    _scanAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(_scanController);
+    _scanAnimation =
+        Tween<double>(begin: 0.0, end: 1.0).animate(_scanController);
   }
 
   @override
@@ -353,7 +356,7 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
     if (text.isEmpty) return;
     ref.read(htmlFloatingProvider.notifier).sendMessage(text);
     _controller.clear();
-    
+
     Future.delayed(const Duration(milliseconds: 100), () {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
@@ -408,7 +411,7 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
   Widget _buildScanningOverlay() {
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withOpacity(0.85),
+        color: Colors.black.withValues(alpha: 0.85),
         child: Center(
           child: Container(
             padding: const EdgeInsets.all(40),
@@ -418,7 +421,7 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
               border: Border.all(color: const Color(0xFF00D9FF), width: 2),
               boxShadow: [
                 BoxShadow(
-                  color: const Color(0xFF00D9FF).withOpacity(0.3),
+                  color: const Color(0xFF00D9FF).withValues(alpha: 0.3),
                   blurRadius: 30,
                   spreadRadius: 5,
                 ),
@@ -449,7 +452,8 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
                               const Color(0xFF00D9FF),
                               const Color(0xFFE040FB),
                               _scanAnimation.value,
-                            )!.withOpacity(0.5),
+                            )!
+                                .withValues(alpha: 0.5),
                             blurRadius: 20,
                             spreadRadius: 5,
                           ),
@@ -497,7 +501,8 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
     return tags.map((tag) {
       final label = tag.tag.trim().toLowerCase();
       final isSafe = label == 'safe';
-      final isDangerous = label == 'scam' || label == 'danger' || label == 'threat';
+      final isDangerous =
+          label == 'scam' || label == 'danger' || label == 'threat';
       final Color backgroundColor = isSafe
           ? const Color(0xFF0F291E)
           : isDangerous
@@ -580,7 +585,8 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Close', style: TextStyle(color: Color(0xFF00D9FF))),
+            child:
+                const Text('Close', style: TextStyle(color: Color(0xFF00D9FF))),
           ),
         ],
       ),
@@ -607,9 +613,8 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
       },
       onPanEnd: (details) {
         final currentX = state.bubblePosition.dx;
-        final snapX = currentX < screenSize.width / 2 
-            ? 0.0 
-            : screenSize.width - 160;
+        final snapX =
+            currentX < screenSize.width / 2 ? 0.0 : screenSize.width - 160;
         notifier.updateBubblePosition(Offset(snapX, state.bubblePosition.dy));
       },
       child: SizedBox(
@@ -618,9 +623,8 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
         child: Stack(
           alignment: Alignment.center,
           children: [
-            if (state.radialMenuOpen) 
+            if (state.radialMenuOpen)
               ..._buildFeatureButtons(notifier, screenSize, state),
-
             GestureDetector(
               onTap: () => notifier.toggleRadialMenu(),
               child: RotationTransition(
@@ -667,7 +671,8 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
     HtmlFloatingState state,
   ) {
     const double radius = 110.0;
-    final isOnRightSide = (state.bubblePosition.dx + 80) > (screenSize.width / 2);
+    final isOnRightSide =
+        (state.bubblePosition.dx + 80) > (screenSize.width / 2);
 
     final List<Map<String, dynamic>> items = [
       {
@@ -687,7 +692,9 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
       },
       {
         'icon': Icons.search,
-        'color': state.scannerActive ? const Color(0xFF00D9FF) : const Color(0xFFE040FB),
+        'color': state.scannerActive
+            ? const Color(0xFF00D9FF)
+            : const Color(0xFFE040FB),
         'onTap': () => notifier.toggleScanner(),
       },
       {
@@ -731,7 +738,7 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: items[index]['color'].withOpacity(0.4),
+                        color: items[index]['color'].withValues(alpha: 0.4),
                         blurRadius: 8,
                         spreadRadius: 2,
                       ),
@@ -771,7 +778,7 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
             border: Border.all(color: const Color(0xFF222222)),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF00AAFF).withOpacity(0.2),
+                color: const Color(0xFF00AAFF).withValues(alpha: 0.2),
                 blurRadius: 20,
                 spreadRadius: 2,
               ),

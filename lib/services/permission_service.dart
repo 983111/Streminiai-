@@ -46,12 +46,12 @@ class PermissionService {
       debugPrint('Error requesting accessibility permission: $e');
     }
   }
-  
 
   Future<bool> hasMicrophonePermission() async {
     if (!Platform.isAndroid) return true;
     try {
-      final bool? has = await _channel.invokeMethod<bool>('hasMicrophonePermission');
+      final bool? has =
+          await _channel.invokeMethod<bool>('hasMicrophonePermission');
       return has ?? false;
     } catch (e) {
       return false;
@@ -63,7 +63,7 @@ class PermissionService {
     try {
       await _channel.invokeMethod('requestMicrophonePermission');
     } catch (e) {
-      print('Error requesting microphone permission: $e');
+      debugPrint('Error requesting microphone permission: $e');
     }
   }
 
