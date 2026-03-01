@@ -80,14 +80,14 @@ class StreminiIME : InputMethodService() {
     )
 
     private val specialCharacterKeyMap = mapOf(
-        R.id.key_at to "@",
-        R.id.key_hash to "#",
-        R.id.key_amp to "&",
-        R.id.key_question to "?",
-        R.id.key_exclaim to "!",
-        R.id.key_underscore to "_",
-        R.id.key_dash to "-",
-        R.id.key_colon to ":"
+        "key_at" to "@",
+        "key_hash" to "#",
+        "key_amp" to "&",
+        "key_question" to "?",
+        "key_exclaim" to "!",
+        "key_underscore" to "_",
+        "key_dash" to "-",
+        "key_colon" to ":"
     )
 
     private val symbolsKeyMap = mapOf(
@@ -142,8 +142,11 @@ class StreminiIME : InputMethodService() {
             keyView?.setOnTouchListener(createKeyTouchListener(id))
         }
 
-        specialCharacterKeyMap.forEach { (id, value) ->
-            view.findViewById<View>(id)?.setOnTouchListener(createTextTouchListener(value))
+        specialCharacterKeyMap.forEach { (idName, value) ->
+            val keyId = resources.getIdentifier(idName, "id", packageName)
+            if (keyId != 0) {
+                view.findViewById<View>(keyId)?.setOnTouchListener(createTextTouchListener(value))
+            }
         }
 
         // Space
