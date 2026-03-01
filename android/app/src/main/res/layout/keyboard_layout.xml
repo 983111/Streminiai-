@@ -144,15 +144,21 @@
             <TextView
                 android:id="@+id/key_symbols"
                 style="@style/KeyboardSpecialKey"
-                android:text="\?123"
+                android:text="123#+"
                 android:textSize="12sp"
                 android:layout_weight="1.2"/>
             
             <TextView
                  android:id="@+id/key_comma"
                  style="@style/KeyboardSpecialKey"
-                 android:text=","
+                 android:text="," 
                  android:layout_weight="1"/>
+
+            <TextView
+                android:id="@+id/key_clipboard"
+                style="@style/KeyboardSpecialKey"
+                android:text="📋"
+                android:layout_weight="1"/>
 
             <TextView
                 android:id="@+id/key_switch_keyboard"
@@ -166,7 +172,7 @@
                 android:text="space"
                 android:textColor="#AAAAAA"
                 android:textSize="12sp" 
-                android:layout_weight="4"/>
+                android:layout_weight="3.2"/>
 
             <TextView
                 android:id="@+id/key_dot"
