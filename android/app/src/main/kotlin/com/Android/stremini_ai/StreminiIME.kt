@@ -1,6 +1,8 @@
 package com.Android.stremini_ai
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.inputmethodservice.InputMethodService
 import android.media.AudioManager
 import android.os.Handler
@@ -33,6 +35,7 @@ class StreminiIME : InputMethodService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var audioManager: AudioManager
+    private lateinit var clipboardManager: ClipboardManager
 
     // Network Client (Optimized for Speed)
     private val client = OkHttpClient.Builder()
@@ -74,8 +77,8 @@ class StreminiIME : InputMethodService() {
         R.id.key_h to "!", R.id.key_j to "?", R.id.key_k to "~", R.id.key_l to "=",
         R.id.key_z to "[", R.id.key_x to "]", R.id.key_c to "{", R.id.key_v to "}", R.id.key_b to "_",
         R.id.key_n to "\\", R.id.key_m to "|",
-        R.id.key_1 to "1", R.id.key_2 to "2", R.id.key_3 to "3", R.id.key_4 to "4", R.id.key_5 to "5",
-        R.id.key_6 to "6", R.id.key_7 to "7", R.id.key_8 to "8", R.id.key_9 to "9", R.id.key_0 to "0",
+        R.id.key_1 to "!", R.id.key_2 to "@", R.id.key_3 to "#", R.id.key_4 to "$", R.id.key_5 to "%",
+        R.id.key_6 to "^", R.id.key_7 to "&", R.id.key_8 to "*", R.id.key_9 to "(", R.id.key_0 to ")",
         R.id.key_dot to ".", R.id.key_comma to ","
     )
 
@@ -93,6 +96,7 @@ class StreminiIME : InputMethodService() {
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     }
 
     override fun onCreateInputView(): View {
@@ -181,6 +185,26 @@ class StreminiIME : InputMethodService() {
                 }
                 MotionEvent.ACTION_CANCEL -> animateKey(v, false)
             }
+            true
+        }
+
+        // Clipboard key: tap = paste, long-press = copy selected/current text
+        view.findViewById<View>(R.id.key_clipboard)?.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    feedback(v)
+                    animateKey(v, true)
+                }
+                MotionEvent.ACTION_UP -> {
+                    animateKey(v, false)
+                    handleClipboardPaste()
+                }
+                MotionEvent.ACTION_CANCEL -> animateKey(v, false)
+            }
+            true
+        }
+        view.findViewById<View>(R.id.key_clipboard)?.setOnLongClickListener {
+            handleClipboardCopy()
             true
         }
 
@@ -423,13 +447,41 @@ class StreminiIME : InputMethodService() {
     // --- UX Feedback ---
 
     private fun feedback(view: View) {
-        // 1. Haptic
+        // 1. Lighter haptic for smoother perceived typing
         view.performHapticFeedback(
             android.view.HapticFeedbackConstants.KEYBOARD_TAP,
-            android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+            android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
         )
-        // 2. Sound (Crucial for "Samsung" feel)
-        audioManager.playSoundEffect(AudioManager.FX_KEY_CLICK)
+        // 2. Sound
+        if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+            audioManager.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.4f)
+        }
+    }
+
+    private fun handleClipboardPaste() {
+        val ic = currentInputConnection ?: return
+        val clip = clipboardManager.primaryClip ?: return
+        val text = clip.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
+        if (text.isNotBlank()) {
+            ic.commitText(text, 1)
+        } else {
+            Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun handleClipboardCopy() {
+        val ic = currentInputConnection ?: return
+        val selected = ic.getSelectedText(0)?.toString().orEmpty()
+        val textToCopy = if (selected.isNotBlank()) selected else getCurrentText()
+
+        if (textToCopy.isBlank()) {
+            Toast.makeText(this, "Nothing to copy", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val clip = ClipData.newPlainText("Stremini", textToCopy)
+        clipboardManager.setPrimaryClip(clip)
+        Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 
     private fun animateKey(view: View, isPressed: Boolean) {
@@ -477,7 +529,7 @@ class StreminiIME : InputMethodService() {
             }
         }
 
-        symbolsKeyView?.text = if (isSymbolsMode) "ABC" else "?123"
+        symbolsKeyView?.text = if (isSymbolsMode) "ABC" else "123#+"
         shiftKeyView?.isEnabled = !isSymbolsMode
         updateShiftState()
         updateEnterKeyLabel(currentInputEditorInfo)
