@@ -3,6 +3,7 @@ package com.Android.stremini_ai
 import android.content.Context
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
 import android.media.AudioManager
 import android.os.Handler
@@ -10,18 +11,21 @@ import android.os.Looper
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.Menu
 import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.view.animation.DecelerateInterpolator
+import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
 import kotlinx.coroutines.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
@@ -31,11 +35,15 @@ class StreminiIME : InputMethodService() {
     companion object {
         private const val TAG = "StreminiIME"
         private const val BASE_URL = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev" // Ensure this matches your worker
+        private const val PREFS_NAME = "keyboard_prefs"
+        private const val CLIPBOARD_HISTORY_KEY = "clipboard_history"
+        private const val CLIPBOARD_HISTORY_LIMIT = 12
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var audioManager: AudioManager
     private lateinit var clipboardManager: ClipboardManager
+    private lateinit var sharedPrefs: SharedPreferences
 
     // Network Client (Optimized for Speed)
     private val client = OkHttpClient.Builder()
@@ -57,6 +65,7 @@ class StreminiIME : InputMethodService() {
     private var enterKeyView: TextView? = null
     private var keyboardRootView: View? = null
     private var currentAppContext = "general"
+    private var selectedTone = "professional"
 
     private val alphaNumericKeyMap = mapOf(
         R.id.key_q to "q", R.id.key_w to "w", R.id.key_e to "e", R.id.key_r to "r", R.id.key_t to "t",
@@ -68,6 +77,17 @@ class StreminiIME : InputMethodService() {
         R.id.key_1 to "1", R.id.key_2 to "2", R.id.key_3 to "3", R.id.key_4 to "4", R.id.key_5 to "5",
         R.id.key_6 to "6", R.id.key_7 to "7", R.id.key_8 to "8", R.id.key_9 to "9", R.id.key_0 to "0",
         R.id.key_dot to ".", R.id.key_comma to ","
+    )
+
+    private val specialCharacterKeyMap = mapOf(
+        R.id.key_at to "@",
+        R.id.key_hash to "#",
+        R.id.key_amp to "&",
+        R.id.key_question to "?",
+        R.id.key_exclaim to "!",
+        R.id.key_underscore to "_",
+        R.id.key_dash to "-",
+        R.id.key_colon to ":"
     )
 
     private val symbolsKeyMap = mapOf(
@@ -97,6 +117,7 @@ class StreminiIME : InputMethodService() {
         super.onCreate()
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        sharedPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
     }
 
     override fun onCreateInputView(): View {
@@ -119,6 +140,10 @@ class StreminiIME : InputMethodService() {
                 letterKeyViews.add(keyView)
             }
             keyView?.setOnTouchListener(createKeyTouchListener(id))
+        }
+
+        specialCharacterKeyMap.forEach { (id, value) ->
+            view.findViewById<View>(id)?.setOnTouchListener(createTextTouchListener(value))
         }
 
         // Space
@@ -189,23 +214,27 @@ class StreminiIME : InputMethodService() {
         }
 
         // Clipboard key: tap = paste, long-press = copy selected/current text
-        view.findViewById<View>(R.id.key_clipboard)?.setOnTouchListener { v, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    feedback(v)
-                    animateKey(v, true)
+        // Resolve by name to avoid variant-specific R.id generation issues.
+        val clipboardKeyId = resources.getIdentifier("key_clipboard", "id", packageName)
+        if (clipboardKeyId != 0) {
+            view.findViewById<View>(clipboardKeyId)?.setOnTouchListener { v, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        feedback(v)
+                        animateKey(v, true)
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        animateKey(v, false)
+                        handleClipboardPaste()
+                    }
+                    MotionEvent.ACTION_CANCEL -> animateKey(v, false)
                 }
-                MotionEvent.ACTION_UP -> {
-                    animateKey(v, false)
-                    handleClipboardPaste()
-                }
-                MotionEvent.ACTION_CANCEL -> animateKey(v, false)
+                true
             }
-            true
-        }
-        view.findViewById<View>(R.id.key_clipboard)?.setOnLongClickListener {
-            handleClipboardCopy()
-            true
+            view.findViewById<View>(clipboardKeyId)?.setOnLongClickListener {
+                showClipboardHistory(it)
+                true
+            }
         }
 
         // Shift Key
@@ -225,7 +254,7 @@ class StreminiIME : InputMethodService() {
         }
         setupAiAction(view, R.id.action_improve, "correct")
         setupAiAction(view, R.id.action_complete, "complete")
-        setupAiAction(view, R.id.action_tone, "tone")
+        setupToneAction(view)
 
         updateKeyboardLabels()
     }
@@ -276,7 +305,9 @@ class StreminiIME : InputMethodService() {
             text
         }
         
+        ic.beginBatchEdit()
         ic.commitText(output, 1)
+        ic.endBatchEdit()
 
         // Auto-turn off shift after one char
         if (!isSymbolsMode && isShiftOn) {
@@ -296,11 +327,13 @@ class StreminiIME : InputMethodService() {
     private fun handleBackspace() {
         val ic = currentInputConnection ?: return
         val selectedText = ic.getSelectedText(0)
+        ic.beginBatchEdit()
         if (!selectedText.isNullOrEmpty()) {
             ic.commitText("", 1)
         } else {
             ic.deleteSurroundingText(1, 0)
         }
+        ic.endBatchEdit()
     }
 
     private fun handleEnterKey() {
@@ -340,6 +373,9 @@ class StreminiIME : InputMethodService() {
                 val json = JSONObject().apply {
                     put("text", originalText)
                     put("appContext", currentAppContext)
+                    if (actionType == "tone") {
+                        put("tone", selectedTone)
+                    }
                     // If backend supports "complete_only_new" flag, add it here.
                     // Otherwise we handle deduplication locally.
                 }
@@ -363,7 +399,12 @@ class StreminiIME : InputMethodService() {
                     
                     val resultText = when (actionType) {
                         "complete" -> resultJson.optString("completion")
-                        "tone" -> resultJson.optString("rewritten")
+                        "tone" -> {
+                            resultJson.optString("rewritten")
+                                .ifBlank { resultJson.optString("result") }
+                                .ifBlank { resultJson.optString("text") }
+                                .ifBlank { resultJson.optString("corrected") }
+                        }
                         else -> resultJson.optString("corrected")
                     }
 
@@ -463,6 +504,7 @@ class StreminiIME : InputMethodService() {
         val clip = clipboardManager.primaryClip ?: return
         val text = clip.getItemAt(0)?.coerceToText(this)?.toString().orEmpty()
         if (text.isNotBlank()) {
+            saveClipboardEntry(text)
             ic.commitText(text, 1)
         } else {
             Toast.makeText(this, "Clipboard is empty", Toast.LENGTH_SHORT).show()
@@ -481,7 +523,64 @@ class StreminiIME : InputMethodService() {
 
         val clip = ClipData.newPlainText("Stremini", textToCopy)
         clipboardManager.setPrimaryClip(clip)
+        saveClipboardEntry(textToCopy)
         Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun showClipboardHistory(anchor: View) {
+        val history = getClipboardHistory()
+        if (history.isEmpty()) {
+            handleClipboardCopy()
+            return
+        }
+
+        val popup = PopupMenu(this, anchor)
+        history.forEachIndexed { index, item ->
+            val label = if (item.length > 40) "${item.take(40)}…" else item
+            popup.menu.add(Menu.NONE, index, index, label)
+        }
+        popup.setOnMenuItemClickListener { menuItem ->
+            val chosen = history.getOrNull(menuItem.itemId).orEmpty()
+            if (chosen.isNotBlank()) {
+                currentInputConnection?.commitText(chosen, 1)
+                true
+            } else {
+                false
+            }
+        }
+        popup.show()
+    }
+
+    private fun saveClipboardEntry(value: String) {
+        val sanitized = value.trim()
+        if (sanitized.isBlank()) return
+
+        val deduped = getClipboardHistory().toMutableList().apply {
+            removeAll { it == sanitized }
+            add(0, sanitized)
+            if (size > CLIPBOARD_HISTORY_LIMIT) {
+                subList(CLIPBOARD_HISTORY_LIMIT, size).clear()
+            }
+        }
+
+        sharedPrefs.edit()
+            .putString(CLIPBOARD_HISTORY_KEY, JSONArray(deduped).toString())
+            .apply()
+    }
+
+    private fun getClipboardHistory(): List<String> {
+        val raw = sharedPrefs.getString(CLIPBOARD_HISTORY_KEY, null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(raw)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val item = arr.optString(i)
+                    if (item.isNotBlank()) add(item)
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun animateKey(view: View, isPressed: Boolean) {
@@ -563,6 +662,34 @@ class StreminiIME : InputMethodService() {
         root.findViewById<View>(id)?.setOnClickListener { 
             feedback(it)
             handleAiAction(action) 
+        }
+    }
+
+    private fun setupToneAction(root: View) {
+        root.findViewById<View>(R.id.action_tone)?.setOnClickListener { view ->
+            feedback(view)
+            val tones = listOf(
+                "professional",
+                "friendly",
+                "confident",
+                "casual",
+                "formal",
+                "empathetic",
+                "concise",
+                "persuasive"
+            )
+
+            val popup = PopupMenu(this, view)
+            tones.forEachIndexed { index, tone ->
+                val title = if (tone == selectedTone) "✓ ${tone.replaceFirstChar { it.uppercase() }}" else tone.replaceFirstChar { it.uppercase() }
+                popup.menu.add(Menu.NONE, index, index, title)
+            }
+            popup.setOnMenuItemClickListener { item ->
+                selectedTone = tones[item.itemId]
+                handleAiAction("tone")
+                true
+            }
+            popup.show()
         }
     }
 
