@@ -64,8 +64,11 @@ class StreminiIME : InputMethodService() {
     private var symbolsKeyView: TextView? = null
     private var enterKeyView: TextView? = null
     private var keyboardRootView: View? = null
+    private val keyTextViewCache = HashMap<Int, TextView>()
     private var currentAppContext = "general"
     private var selectedTone = "professional"
+    private var aiActionJob: Job? = null
+    private var lastAiActionTs = 0L
 
     private val alphaNumericKeyMap = mapOf(
         R.id.key_q to "q", R.id.key_w to "w", R.id.key_e to "e", R.id.key_r to "r", R.id.key_t to "t",
@@ -123,8 +126,19 @@ class StreminiIME : InputMethodService() {
     override fun onCreateInputView(): View {
         val view = layoutInflater.inflate(R.layout.keyboard_layout, null)
         keyboardRootView = view
+        buildKeyCache(view)
         setupKeyboardInteractions(view)
         return view
+    }
+
+    private fun buildKeyCache(view: View) {
+        keyTextViewCache.clear()
+        alphaNumericKeyMap.keys.forEach { id ->
+            (view.findViewById<View>(id) as? TextView)?.let { keyTextViewCache[id] = it }
+        }
+        listOf(R.id.key_symbols, R.id.key_enter).forEach { id ->
+            (view.findViewById<View>(id) as? TextView)?.let { keyTextViewCache[id] = it }
+        }
     }
 
     private fun setupKeyboardInteractions(view: View) {
@@ -135,7 +149,7 @@ class StreminiIME : InputMethodService() {
 
         // 1. Attach High-Performance Listeners
         alphaNumericKeyMap.forEach { (id, char) ->
-            val keyView = view.findViewById<View>(id)
+            val keyView = keyTextViewCache[id] ?: view.findViewById<View>(id)
             if (keyView is TextView && char.length == 1 && char[0].isLetter()) {
                 letterKeyViews.add(keyView)
             }
@@ -268,14 +282,10 @@ class StreminiIME : InputMethodService() {
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     // Instant feedback + instant commit for smoother typing response.
-                    feedback(v)
-                    animateKey(v, true)
                     commitText(resolveKeyOutput(keyId))
+                    feedback(v)
                 }
-                MotionEvent.ACTION_UP -> animateKey(v, false)
-                MotionEvent.ACTION_CANCEL -> {
-                    animateKey(v, false)
-                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> Unit
             }
             true
         }
@@ -287,12 +297,10 @@ class StreminiIME : InputMethodService() {
         return View.OnTouchListener { v, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    feedback(v)
-                    animateKey(v, true)
                     commitText(text)
+                    feedback(v)
                 }
-                MotionEvent.ACTION_UP -> animateKey(v, false)
-                MotionEvent.ACTION_CANCEL -> animateKey(v, false)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> Unit
             }
             true
         }
@@ -308,9 +316,10 @@ class StreminiIME : InputMethodService() {
             text
         }
         
-        ic.beginBatchEdit()
         ic.commitText(output, 1)
-        ic.endBatchEdit()
+        if (aiActionJob?.isActive == true) {
+            serviceScope.coroutineContext.cancelChildren(CancellationException("User continued typing"))
+        }
 
         // Auto-turn off shift after one char
         if (!isSymbolsMode && isShiftOn) {
@@ -364,13 +373,19 @@ class StreminiIME : InputMethodService() {
     // --- AI Feature Logic ---
 
     private fun handleAiAction(actionType: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastAiActionTs < 250L) return
+        lastAiActionTs = now
+
         val originalText = getCurrentText()
         if (originalText.isBlank()) return
+
+        aiActionJob?.cancel(CancellationException("Replaced by a newer AI action"))
 
         // Lightweight feedback
         Toast.makeText(this, "Thinking...", Toast.LENGTH_SHORT).show()
 
-        serviceScope.launch(Dispatchers.IO) {
+        aiActionJob = serviceScope.launch(Dispatchers.IO) {
             try {
                 // Prepare Request
                 val json = JSONObject().apply {
@@ -491,14 +506,16 @@ class StreminiIME : InputMethodService() {
     // --- UX Feedback ---
 
     private fun feedback(view: View) {
-        // 1. Lighter haptic for smoother perceived typing
-        view.performHapticFeedback(
-            android.view.HapticFeedbackConstants.KEYBOARD_TAP,
-            android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
-        )
-        // 2. Sound
-        if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-            audioManager.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.4f)
+        serviceScope.launch(Dispatchers.Default) {
+            // 1. Lighter haptic for smoother perceived typing
+            view.performHapticFeedback(
+                android.view.HapticFeedbackConstants.KEYBOARD_TAP,
+                android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
+            )
+            // 2. Sound
+            if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                audioManager.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.4f)
+            }
         }
     }
 
@@ -619,7 +636,7 @@ class StreminiIME : InputMethodService() {
 
     private fun updateKeyboardLabels() {
         alphaNumericKeyMap.keys.forEach { id ->
-            val view = keyboardRootView?.findViewById<TextView>(id)
+            val view = keyTextViewCache[id] ?: keyboardRootView?.findViewById<TextView>(id)
             val text = if (isSymbolsMode) {
                 symbolsKeyMap[id]
             } else {
