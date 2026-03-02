@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/legacy.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -133,11 +134,11 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
       timestamp: DateTime.now(),
     );
 
-    final next = [...current.where((m) => m.id != _initialGreetingId), userMessage];
+    final List<Message> next = [...current.where((m) => m.id != _initialGreetingId), userMessage];
     state = AsyncValue.data(next);
     addTypingIndicator();
     ref.read(chatStateProvider.notifier).state =
-        ref.read(chatStateProvider).copyWith(isLoading: true, messages: state.value ?? []);
+        ref.read(chatStateProvider).copyWith(isLoading: true, messages: state.value ?? <Message>[]);
 
     try {
       final history = _getHistory(next);
@@ -158,8 +159,8 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
             );
 
       removeTypingIndicator();
-      final updated = [
-        ...(state.value ?? []),
+      final List<Message> updated = [
+        ...(state.value ?? <Message>[]),
         Message(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
           text: result.when(
@@ -178,8 +179,8 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
           );
     } catch (e) {
       removeTypingIndicator();
-      final updated = [
-        ...(state.value ?? []),
+      final List<Message> updated = [
+        ...(state.value ?? <Message>[]),
         Message(
           id: DateTime.now().toString(),
           text: '⚠️ ${UnknownFailure(e.toString()).message}',
@@ -203,8 +204,8 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
       timestamp: DateTime.now(),
     );
 
-    final updated = [
-      ...(state.value ?? []).where((m) => m.id != _initialGreetingId),
+    final List<Message> updated = [
+      ...(state.value ?? <Message>[]).where((m) => m.id != _initialGreetingId),
       banner,
     ];
     state = AsyncValue.data(updated);
@@ -215,8 +216,8 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
 
   void clearDocument() {
     ref.read(documentContextProvider.notifier).state = null;
-    final updated = [
-      ...(state.value ?? []),
+    final List<Message> updated = [
+      ...(state.value ?? <Message>[]),
       Message(
         id: 'doc_clear_${DateTime.now().millisecondsSinceEpoch}',
         text: '📄 Document cleared. Back to normal chat.',
@@ -246,7 +247,7 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
 
   Future<void> clearChat() async {
     ref.read(documentContextProvider.notifier).state = null;
-    final updated = [_greeting()];
+    final List<Message> updated = [_greeting()];
     state = AsyncValue.data(updated);
     await _persist(updated);
     ref.read(chatStateProvider.notifier).state = ChatState(messages: updated);

@@ -1,13 +1,12 @@
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import '../core/config/env_config.dart';
 
 class ApiService {
-  static const String baseUrl =
-      "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev";
-  static const String githubAgentUrl =
-      "https://agentic-github-debugger.vishwajeetadkine705.workers.dev";
-
+  static const String baseUrl = EnvConfig.baseUrl;     
+  static const String githubAgentUrl = EnvConfig.githubAgentUrl;
+      
   Future<void> initSession() async {}
   Future<void> clearSession() async {}
 
