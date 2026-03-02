@@ -58,8 +58,14 @@ class StreminiIME : InputMethodService() {
     private val keyTextViewCache = HashMap<Int, TextView>()
     private var currentAppContext = "general"
     private var selectedTone = "professional"
+    private var translateLanguages: List<LanguageOption> = emptyList()
     private var aiActionJob: Job? = null
     private var lastAiActionTs = 0L
+
+    private val majorLanguageCodes = setOf(
+        "ar", "bn", "de", "en", "es", "fr", "hi", "id", "it", "ja",
+        "ko", "nl", "pl", "pt", "ru", "th", "tr", "uk", "ur", "vi", "zh"
+    )
 
     private val alphaNumericKeyMap = mapOf(
         R.id.key_q to "q", R.id.key_w to "w", R.id.key_e to "e", R.id.key_r to "r", R.id.key_t to "t",
@@ -263,6 +269,7 @@ class StreminiIME : InputMethodService() {
         setupAiAction(view, R.id.action_improve, "correct")
         setupAiAction(view, R.id.action_complete, "complete")
         setupToneAction(view)
+        setupTranslateAction(view)
 
         updateKeyboardLabels()
     }
@@ -670,6 +677,88 @@ class StreminiIME : InputMethodService() {
             popup.show()
         }
     }
+
+    private fun setupTranslateAction(root: View) {
+        root.findViewById<View>(R.id.action_translate)?.setOnClickListener { view ->
+            feedback(view)
+            serviceScope.launch {
+                val languages = withContext(Dispatchers.IO) { getMajorLanguages() }
+                if (languages.isEmpty()) {
+                    Toast.makeText(this@StreminiIME, "Language list unavailable", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+
+                val popup = PopupMenu(this@StreminiIME, view)
+                languages.forEachIndexed { index, language ->
+                    popup.menu.add(Menu.NONE, index, index, "${language.name} (${language.code})")
+                }
+                popup.setOnMenuItemClickListener { item ->
+                    val chosen = languages.getOrNull(item.itemId) ?: return@setOnMenuItemClickListener false
+                    handleTranslate(chosen)
+                    true
+                }
+                popup.show()
+            }
+        }
+    }
+
+    private suspend fun getMajorLanguages(): List<LanguageOption> {
+        if (translateLanguages.isNotEmpty()) return translateLanguages
+
+        val remote = imeBackendClient.getTranslateLanguages().getOrDefault(emptyList())
+        translateLanguages = if (remote.isNotEmpty()) {
+            remote.filter { it.code.lowercase() in majorLanguageCodes }
+                .sortedBy { it.name.lowercase() }
+        } else {
+            fallbackMajorLanguages()
+        }
+        return translateLanguages
+    }
+
+    private fun handleTranslate(language: LanguageOption) {
+        val originalText = getCurrentText()
+        if (originalText.isBlank()) return
+
+        aiActionJob?.cancel(CancellationException("Replaced by translate action"))
+        Toast.makeText(this, "Translating to ${language.name}...", Toast.LENGTH_SHORT).show()
+
+        aiActionJob = serviceScope.launch(Dispatchers.IO) {
+            val translated = imeBackendClient.translateText(
+                text = originalText,
+                targetLanguage = language.code,
+            ).getOrNull().orEmpty()
+
+            if (translated.isNotBlank()) {
+                withContext(Dispatchers.Main) {
+                    replaceFullText(translated)
+                }
+            }
+        }
+    }
+
+    private fun fallbackMajorLanguages(): List<LanguageOption> = listOf(
+        LanguageOption("ar", "Arabic"),
+        LanguageOption("bn", "Bengali"),
+        LanguageOption("de", "German"),
+        LanguageOption("en", "English"),
+        LanguageOption("es", "Spanish"),
+        LanguageOption("fr", "French"),
+        LanguageOption("hi", "Hindi"),
+        LanguageOption("id", "Indonesian"),
+        LanguageOption("it", "Italian"),
+        LanguageOption("ja", "Japanese"),
+        LanguageOption("ko", "Korean"),
+        LanguageOption("nl", "Dutch"),
+        LanguageOption("pl", "Polish"),
+        LanguageOption("pt", "Portuguese"),
+        LanguageOption("ru", "Russian"),
+        LanguageOption("th", "Thai"),
+        LanguageOption("tr", "Turkish"),
+        LanguageOption("uk", "Ukrainian"),
+        LanguageOption("ur", "Urdu"),
+        LanguageOption("vi", "Vietnamese"),
+        LanguageOption("zh", "Chinese"),
+    )
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
