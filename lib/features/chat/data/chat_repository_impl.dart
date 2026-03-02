@@ -1,3 +1,4 @@
+import '../../../core/result/result.dart';
 import '../domain/chat_repository.dart';
 import 'chat_client.dart';
 
@@ -7,7 +8,7 @@ class ChatRepositoryImpl implements ChatRepository {
   final ChatClient _client;
 
   @override
-  Future<String> sendMessage({
+  Future<Result<String>> sendMessage({
     required String message,
     List<Map<String, dynamic>> history = const [],
     String? attachment,
@@ -24,7 +25,7 @@ class ChatRepositoryImpl implements ChatRepository {
   }
 
   @override
-  Future<String> sendDocumentMessage({
+  Future<Result<String>> sendDocumentMessage({
     required String documentText,
     required String question,
     List<Map<String, dynamic>> history = const [],

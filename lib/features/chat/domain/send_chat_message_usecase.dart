@@ -1,3 +1,4 @@
+import '../../../core/result/result.dart';
 import 'chat_repository.dart';
 
 class SendChatMessageUseCase {
@@ -5,7 +6,7 @@ class SendChatMessageUseCase {
 
   final ChatRepository _repository;
 
-  Future<String> call({
+  Future<Result<String>> call({
     required String message,
     List<Map<String, dynamic>> history = const [],
     String? attachment,

@@ -23,7 +23,7 @@ class ScreenScannerController {
     try {
       await _channel.invokeMethod('requestAccessibilityPermission');
     } catch (e) {
-      print('Error requesting accessibility permission: $e');
+      AppLogger.error('Error requesting accessibility permission: $e');
     }
   }
 
@@ -33,7 +33,7 @@ class ScreenScannerController {
       final result = await _channel.invokeMethod('startScanning');
       return result == true;
     } catch (e) {
-      print('Error starting scan: $e');
+      AppLogger.error('Error starting scan: $e');
       return false;
     }
   }
@@ -43,7 +43,7 @@ class ScreenScannerController {
     try {
       await _channel.invokeMethod('stopScanning');
     } catch (e) {
-      print('Error stopping scan: $e');
+      AppLogger.error('Error stopping scan: $e');
     }
   }
 

@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/network/base_client.dart';
+import '../core/result/result.dart';
 import '../features/chat/data/chat_client.dart';
 import '../features/chat/data/chat_repository_impl.dart';
 import '../features/chat/domain/chat_repository.dart';
@@ -142,7 +143,7 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
       final history = _getHistory(next);
       final docCtx = ref.read(documentContextProvider);
 
-      final reply = (docCtx != null && trimmed.isNotEmpty)
+      final result = (docCtx != null && trimmed.isNotEmpty)
           ? await ref.read(sendDocumentChatMessageUseCaseProvider)(
               documentText: docCtx.text,
               question: trimmed,
@@ -161,22 +162,27 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
         ...(state.value ?? []),
         Message(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
-          text: reply,
+          text: result.when(
+            success: (reply) => reply,
+            failure: (failure) => '⚠️ ${failure.message}',
+          ),
           type: MessageType.bot,
           timestamp: DateTime.now(),
         ),
       ];
       state = AsyncValue.data(updated);
       await _persist(updated);
-      ref.read(chatStateProvider.notifier).state =
-          ref.read(chatStateProvider).copyWith(isLoading: false);
+      ref.read(chatStateProvider.notifier).state = ref.read(chatStateProvider).copyWith(
+            isLoading: false,
+            errorMessage: result.when(success: (_) => null, failure: (f) => f.message),
+          );
     } catch (e) {
       removeTypingIndicator();
       final updated = [
         ...(state.value ?? []),
         Message(
           id: DateTime.now().toString(),
-          text: '⚠️ Error: $e',
+          text: '⚠️ ${UnknownFailure(e.toString()).message}',
           type: MessageType.bot,
           timestamp: DateTime.now(),
         ),

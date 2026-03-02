@@ -1,3 +1,4 @@
+import '../../../core/result/result.dart';
 import 'chat_repository.dart';
 
 class SendDocumentChatMessageUseCase {
@@ -5,7 +6,7 @@ class SendDocumentChatMessageUseCase {
 
   final ChatRepository _repository;
 
-  Future<String> call({
+  Future<Result<String>> call({
     required String documentText,
     required String question,
     List<Map<String, dynamic>> history = const [],
