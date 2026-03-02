@@ -207,7 +207,7 @@ class StreminiIME : InputMethodService() {
             true
         }
 
-        // Emoji/System panel key (normal mode only)
+        // Switch keyboard key: open system keyboard picker.
         view.findViewById<View>(R.id.key_switch_keyboard)?.setOnTouchListener { v, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -216,9 +216,7 @@ class StreminiIME : InputMethodService() {
                 }
                 MotionEvent.ACTION_UP -> {
                     animateKey(v, false)
-                    if (!isAiFeatureMode) {
-                        showKeyboardSwitcher()
-                    }
+                    showKeyboardSwitcher()
                 }
                 MotionEvent.ACTION_CANCEL -> animateKey(v, false)
             }
@@ -237,9 +235,7 @@ class StreminiIME : InputMethodService() {
                     }
                     MotionEvent.ACTION_UP -> {
                         animateKey(v, false)
-                        if (!isAiFeatureMode) {
-                            handleClipboardPaste()
-                        }
+                        showKeyboardSwitcher()
                     }
                     MotionEvent.ACTION_CANCEL -> animateKey(v, false)
                 }
@@ -646,9 +642,12 @@ class StreminiIME : InputMethodService() {
     private fun toggleKeyboardMode() {
         isAiFeatureMode = !isAiFeatureMode
         updateKeyboardModeUi()
+        if (!isAiFeatureMode) {
+            showKeyboardSwitcher()
+        }
         Toast.makeText(
             this,
-            if (isAiFeatureMode) "AI tools enabled" else "Normal clipboard/emoji mode",
+            if (isAiFeatureMode) "AI tools enabled" else "Switched to system keyboard mode",
             Toast.LENGTH_SHORT
         ).show()
     }
@@ -670,8 +669,9 @@ class StreminiIME : InputMethodService() {
         quickActions?.visibility = View.VISIBLE
         modeToggle?.text = if (isAiFeatureMode) "↻" else "✨ AI"
 
-        clipboard?.visibility = if (isAiFeatureMode) View.GONE else View.VISIBLE
-        emoji?.visibility = if (isAiFeatureMode) View.GONE else View.VISIBLE
+        // Clipboard and emoji should come from the normal system keyboard, not Stremini IME keys.
+        clipboard?.visibility = View.GONE
+        emoji?.visibility = View.GONE
     }
 
     private fun setupAiAction(root: View, id: Int, action: String) {
