@@ -123,6 +123,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
     private val aiBackendClient = AIBackendClient()
     private val deviceCommandRouter = DeviceCommandRouter()
     private lateinit var chatCommandCoordinator: ChatCommandCoordinator

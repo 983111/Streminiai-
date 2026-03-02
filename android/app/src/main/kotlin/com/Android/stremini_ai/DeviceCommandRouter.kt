@@ -21,5 +21,5 @@ class DeviceCommandRouter {
         return deviceCommandKeywords.any { lower.contains(it) }
     }
 
-    fun executeDirect(message: String): Boolean = FullDeviceCommandExecutor.executeCommand(message)
+    fun executeDirect(message: String): Boolean = ScreenReaderService.runGenericAutomation(message)
 }
