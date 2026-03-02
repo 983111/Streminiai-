@@ -127,6 +127,13 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
+    private val aiBackendClient = AIBackendClient()
+    private val deviceCommandRouter = DeviceCommandRouter()
+    private lateinit var bubbleController: BubbleController
+    private lateinit var floatingChatController: FloatingChatController
+    private lateinit var voiceController: VoiceController
+    private lateinit var idleAnimationController: IdleAnimationController
+
     private val controlReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -155,6 +162,19 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         startForegroundService()
+
+        bubbleController = BubbleController(::hideBubble, ::showBubble).apply { setVisible(isBubbleVisible) }
+        floatingChatController = FloatingChatController(::showFloatingChatbot, ::hideFloatingChatbot)
+        voiceController = VoiceController(
+            context = this,
+            onFinalText = { spokenText -> executeVoiceCommand(spokenText) },
+            onError = { if (keepListeningLoop) serviceScope.launch { delay(450); startVoiceCapture() } }
+        )
+        idleAnimationController = IdleAnimationController(
+            onIdle = { if (!isMenuExpanded && !isDragging && !isMenuAnimating) shrinkBubble() },
+            onWake = { restoreBubble() }
+        )
+
         setupOverlay()
 
         val filter = IntentFilter().apply {
@@ -171,9 +191,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_TOGGLE_BUBBLE -> {
-                if (isBubbleVisible) hideBubble() else showBubble()
-            }
+            ACTION_TOGGLE_BUBBLE -> bubbleController.toggle()
             ACTION_STOP_SERVICE -> {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -187,9 +205,11 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         // Collapse menu first if expanded
         if (isMenuExpanded) collapseMenu()
         // Cancel idle timer
+        idleAnimationController.cancel()
         idleRunnable?.let { idleHandler.removeCallbacks(it) }
         overlayView.visibility = View.GONE
         isBubbleVisible = false
+        bubbleController.setVisible(false)
         updateNotification()
     }
 
@@ -202,6 +222,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         bubbleIcon.alpha = 1f
         isBubbleIdle = false
         isBubbleVisible = true
+        bubbleController.setVisible(true)
         updateNotification()
         resetIdleTimer()
     }
@@ -286,21 +307,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     // ==========================================
 
     private fun resetIdleTimer() {
-        // Cancel any pending idle callback
-        idleRunnable?.let { idleHandler.removeCallbacks(it) }
-
-        // If currently idle, restore bubble first
-        if (isBubbleIdle) {
-            restoreBubble()
-        }
-
-        // Schedule new idle callback
-        idleRunnable = Runnable {
-            if (!isMenuExpanded && !isDragging && !isMenuAnimating) {
-                shrinkBubble()
-            }
-        }
-        idleHandler.postDelayed(idleRunnable!!, IDLE_TIMEOUT_MS)
+        idleAnimationController.resetTimer()
     }
 
     private fun shrinkBubble() {
@@ -399,8 +406,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     private fun handleAIChat() {
         toggleFeature(menuItems[2].id)
-        if (isFeatureActive(menuItems[2].id)) showFloatingChatbot()
-        else hideFloatingChatbot()
+        if (isFeatureActive(menuItems[2].id)) floatingChatController.show()
+        else floatingChatController.hide()
     }
 
     private fun showFloatingChatbot() {
@@ -478,35 +485,17 @@ class ChatOverlayService : Service(), View.OnTouchListener {
      * Smart command processor - routes to device control or AI chat
      */
     private fun processUserCommand(userMessage: String) {
-        val normalized = userMessage.trim().lowercase()
-
-        // Check if it's a device control command
-        val isDeviceCommand = DEVICE_COMMAND_KEYWORDS.any { keyword ->
-            normalized.startsWith(keyword) || normalized.contains(" $keyword ") || normalized.contains(" $keyword")
-        }
-
-        if (isDeviceCommand) {
-            addMessageToChatbot("⚙️ Executing: $userMessage", isUser = false)
-            serviceScope.launch {
-                val success = withContext(Dispatchers.IO) {
-                    try {
-                        ScreenReaderService.runGenericAutomation(userMessage)
-                        true
-                    } catch (e: Exception) { false }
-                }
-                // Give it a moment to execute then confirm
-                delay(1000)
-                if (success) {
-                    addMessageToChatbot("✅ Done! Command executed successfully.", isUser = false)
-                } else {
-                    // Fallback to AI for smart processing
-                    sendCommandToAIWithDeviceContext(userMessage)
-                }
+        if (deviceCommandRouter.isDeviceCommand(userMessage)) {
+            val success = deviceCommandRouter.executeDirect(userMessage)
+            if (success) {
+                addMessageToChatbot("✅ Done! Command executed successfully.", isUser = false)
+            } else {
+                sendCommandToAIWithDeviceContext(userMessage)
             }
-        } else {
-            // Regular AI chat
-            sendMessageToAPI(userMessage)
+            return
         }
+
+        sendMessageToAPI(userMessage)
     }
 
     private val DEVICE_COMMAND_KEYWORDS = listOf(
@@ -525,10 +514,9 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     )
 
     private fun sendCommandToAIWithDeviceContext(command: String) {
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                // Get current screen context
-                val screenText = try { ScreenReaderService.getInstance()?.let { service ->
+        serviceScope.launch {
+            val screenText = try {
+                ScreenReaderService.getInstance()?.let { service ->
                     val root = service.rootInActiveWindow
                     val sb = StringBuilder()
                     fun traverse(node: android.view.accessibility.AccessibilityNodeInfo) {
@@ -538,54 +526,20 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     }
                     root?.let { traverse(it) }
                     sb.toString().take(1000)
-                } ?: "" } catch (e: Exception) { "" }
+                } ?: ""
+            } catch (e: Exception) { "" }
 
-                val requestJson = JSONObject().apply {
-                    put("message", command)
-                    put("screen_context", screenText)
-                    put("mode", "device_control")
-                }
-
-                val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/chat/message")
-                    .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string() ?: ""
-                    val json = JSONObject(responseBody)
-                    val reply = json.optString("reply", json.optString("response", json.optString("message", "Command processed")))
-                    withContext(Dispatchers.Main) { addMessageToChatbot(reply, isUser = false) }
-                } else {
-                    withContext(Dispatchers.Main) { addMessageToChatbot("❌ Could not process command (${response.code})", isUser = false) }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { addMessageToChatbot("⚠️ Network error: ${e.message}", isUser = false) }
-            }
+            aiBackendClient.sendDeviceCommand(command, screenText)
+                .onSuccess { reply -> addMessageToChatbot(reply, isUser = false) }
+                .onFailure { error -> addMessageToChatbot("⚠️ ${error.message}", isUser = false) }
         }
     }
 
     private fun sendMessageToAPI(userMessage: String) {
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val requestBody = JSONObject().apply { put("message", userMessage) }
-                    .toString().toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/chat/message")
-                    .post(requestBody).build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string() ?: "")
-                    val reply = json.optString("reply", json.optString("response", json.optString("message", "No response")))
-                    withContext(Dispatchers.Main) { addMessageToChatbot(reply, isUser = false) }
-                } else {
-                    withContext(Dispatchers.Main) { addMessageToChatbot("❌ Server error: ${response.code}", isUser = false) }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { addMessageToChatbot("⚠️ Network error: ${e.message}", isUser = false) }
-            }
+        serviceScope.launch {
+            aiBackendClient.sendChatMessage(userMessage)
+                .onSuccess { reply -> addMessageToChatbot(reply, isUser = false) }
+                .onFailure { error -> addMessageToChatbot("⚠️ ${error.message}", isUser = false) }
         }
     }
 
@@ -608,6 +562,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         if (!isChatbotVisible) return
         floatingChatView?.let { windowManager.removeView(it) }
         floatingChatView = null; floatingChatParams = null; isChatbotVisible = false
+        floatingChatController.setVisible(false)
     }
 
     // ==========================================
@@ -656,6 +611,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     private fun hideAutoTasker() {
         keepListeningLoop = false
+        voiceController.stop()
         speechRecognizer?.destroy(); speechRecognizer = null
         autoTaskerView?.let { windowManager.removeView(it) }
         autoTaskerView = null; autoTaskerParams = null; isAutoTaskerVisible = false
@@ -665,6 +621,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         val view = autoTaskerView ?: return
         val status = view.findViewById<TextView>(R.id.tv_tasker_status)
         status.text = "Listening..."
+        voiceController.stop()
         speechRecognizer?.destroy()
 
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
@@ -1272,6 +1229,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     override fun onDestroy() {
         super.onDestroy()
+        idleAnimationController.cancel()
         idleRunnable?.let { idleHandler.removeCallbacks(it) }
         serviceScope.cancel()
         unregisterReceiver(controlReceiver)
