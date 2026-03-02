@@ -898,27 +898,19 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
     private fun openKeyboardSwitcher() {
-        // Force keyboard visibility first, then open picker. This makes switching work
-        // even when currently using another keyboard (e.g., Samsung -> Stremini).
         try {
-            inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
-        } catch (_: Exception) {}
-
-        overlayView.postDelayed({
+            inputMethodManager.showInputMethodPicker()
+            Toast.makeText(this, "Choose keyboard", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
             try {
-                inputMethodManager.showInputMethodPicker()
-                Toast.makeText(this, "Choose keyboard", Toast.LENGTH_SHORT).show()
-            } catch (e: Exception) {
-                try {
-                    startActivity(Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                    Toast.makeText(this, "Open settings to switch keyboards", Toast.LENGTH_SHORT).show()
-                } catch (_: Exception) {
-                    Toast.makeText(this, "Could not open keyboard switcher", Toast.LENGTH_SHORT).show()
-                }
+                startActivity(Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                Toast.makeText(this, "Open settings to switch keyboards", Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) {
+                Toast.makeText(this, "Could not open keyboard switcher", Toast.LENGTH_SHORT).show()
             }
-        }, 120L)
+        }
     }
 
     private fun handleSettings() {
