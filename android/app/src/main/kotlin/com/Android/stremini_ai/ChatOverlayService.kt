@@ -276,6 +276,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         params.y = bubbleScreenY - windowHalfSize
 
         bubbleIcon.setOnTouchListener(this)
+        bubbleIcon.setOnLongClickListener {
+            openKeyboardSwitcher()
+            true
+        }
 
         menuItems[0].setOnClickListener { collapseMenu(); handleAutoTasker() }
         menuItems[1].setOnClickListener { collapseMenu(); handleSettings() }
@@ -890,23 +894,31 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     }
 
     private fun handleKeyboard() {
-        toggleFeature(menuItems[4].id)
-        if (isFeatureActive(menuItems[4].id)) {
+        openKeyboardSwitcher()
+    }
+
+    private fun openKeyboardSwitcher() {
+        // Force keyboard visibility first, then open picker. This makes switching work
+        // even when currently using another keyboard (e.g., Samsung -> Stremini).
+        try {
+            inputMethodManager.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
+        } catch (_: Exception) {}
+
+        overlayView.postDelayed({
             try {
-                startActivity(Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-                Toast.makeText(this, "Open Settings to enable AI Keyboard", Toast.LENGTH_SHORT).show()
+                inputMethodManager.showInputMethodPicker()
+                Toast.makeText(this, "Choose keyboard", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                try { inputMethodManager.showInputMethodPicker()
-                    Toast.makeText(this, "Select AI Keyboard from the list", Toast.LENGTH_SHORT).show()
-                } catch (ex: Exception) {
-                    Toast.makeText(this, "AI Keyboard feature enabled", Toast.LENGTH_SHORT).show()
+                try {
+                    startActivity(Intent(android.provider.Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                    Toast.makeText(this, "Open settings to switch keyboards", Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {
+                    Toast.makeText(this, "Could not open keyboard switcher", Toast.LENGTH_SHORT).show()
                 }
             }
-        } else {
-            Toast.makeText(this, "AI Keyboard Disabled", Toast.LENGTH_SHORT).show()
-        }
+        }, 120L)
     }
 
     private fun handleSettings() {

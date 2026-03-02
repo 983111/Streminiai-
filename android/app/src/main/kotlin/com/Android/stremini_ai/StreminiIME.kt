@@ -5,10 +5,10 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.SharedPreferences
 import android.inputmethodservice.InputMethodService
-import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.os.Build
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.Menu
@@ -37,7 +37,6 @@ class StreminiIME : InputMethodService() {
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private lateinit var audioManager: AudioManager
     private lateinit var clipboardManager: ClipboardManager
     private lateinit var sharedPrefs: SharedPreferences
 
@@ -123,7 +122,6 @@ class StreminiIME : InputMethodService() {
 
     override fun onCreate() {
         super.onCreate()
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         sharedPrefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
     }
@@ -152,7 +150,9 @@ class StreminiIME : InputMethodService() {
         symbolsKeyView = view.findViewById(R.id.key_symbols)
         enterKeyView = view.findViewById(R.id.key_enter)
 
-        // 1. Attach High-Performance Listeners
+        muteKeyboardSoundEffects(view)
+
+        // 1. Attach key listeners
         alphaNumericKeyMap.forEach { (id, char) ->
             val keyView = keyTextViewCache[id] ?: view.findViewById<View>(id)
             if (keyView is TextView && char.length == 1 && char[0].isLetter()) {
@@ -283,16 +283,29 @@ class StreminiIME : InputMethodService() {
         updateKeyboardModeUi()
     }
 
+    private fun muteKeyboardSoundEffects(root: View) {
+        root.isSoundEffectsEnabled = false
+        root.isHapticFeedbackEnabled = true
+        (root as? android.view.ViewGroup)?.let { group ->
+            for (i in 0 until group.childCount) {
+                muteKeyboardSoundEffects(group.getChildAt(i))
+            }
+        }
+    }
+
     // --- Performance Touch Listener ---
     private fun createKeyTouchListener(keyId: Int): View.OnTouchListener {
         return View.OnTouchListener { v, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    // Instant feedback + instant commit for smoother typing response.
-                    commitText(resolveKeyOutput(keyId))
                     feedback(v)
+                    animateKey(v, true)
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> Unit
+                MotionEvent.ACTION_UP -> {
+                    animateKey(v, false)
+                    commitText(resolveKeyOutput(keyId))
+                }
+                MotionEvent.ACTION_CANCEL -> animateKey(v, false)
             }
             true
         }
@@ -304,10 +317,14 @@ class StreminiIME : InputMethodService() {
         return View.OnTouchListener { v, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    commitText(text)
                     feedback(v)
+                    animateKey(v, true)
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> Unit
+                MotionEvent.ACTION_UP -> {
+                    animateKey(v, false)
+                    commitText(text)
+                }
+                MotionEvent.ACTION_CANCEL -> animateKey(v, false)
             }
             true
         }
@@ -480,17 +497,14 @@ class StreminiIME : InputMethodService() {
     // --- UX Feedback ---
 
     private fun feedback(view: View) {
-        serviceScope.launch(Dispatchers.Default) {
-            // 1. Lighter haptic for smoother perceived typing
-            view.performHapticFeedback(
-                android.view.HapticFeedbackConstants.KEYBOARD_TAP,
-                android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
-            )
-            // 2. Sound
-            if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                audioManager.playSoundEffect(AudioManager.FX_KEY_CLICK, 0.4f)
-            }
+        // Keep feedback lightweight and silent for smoother typing.
+        val hapticFlag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING or
+                android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+        } else {
+            android.view.HapticFeedbackConstants.FLAG_IGNORE_VIEW_SETTING
         }
+        view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP, hapticFlag)
     }
 
     private fun handleClipboardPaste() {
