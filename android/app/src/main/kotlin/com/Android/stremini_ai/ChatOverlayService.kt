@@ -697,6 +697,9 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                     } else {
                         status.text = "Understood: $command"
                         view.findViewById<TextView>(R.id.tv_tasker_output).text = "🎙 Command: $command\n\n⚙️ Executing..."
+                        // Close the large tasker overlay before automation starts.
+                        // This prevents the overlay from blocking accessibility capture.
+                        hideAutoTasker()
                         executeVoiceCommand(command)
                     }
                 }
@@ -715,9 +718,8 @@ class ChatOverlayService : Service(), View.OnTouchListener {
      */
     private fun executeVoiceCommand(command: String) {
         serviceScope.launch {
-            val view = autoTaskerView ?: return@launch
-            val statusView = view.findViewById<TextView>(R.id.tv_tasker_status)
-            val outputView = view.findViewById<TextView>(R.id.tv_tasker_output)
+            addMessageToChatbot("🎙 Command: $command", isUser = true)
+            addMessageToChatbot("⚙️ Executing command...", isUser = false)
 
             // 1. Try direct device automation first
             val directResult = withContext(Dispatchers.IO) {
@@ -725,29 +727,20 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             }
 
             if (directResult.executed) {
-                statusView.text = "✅ ${directResult.statusMessage}"
-                outputView.text = "🎙 Command: $command\n\n✅ ${directResult.details}"
+                addMessageToChatbot("✅ ${directResult.details}", isUser = false)
                 return@launch
             }
 
             // 2. Try AI backend for smart plan generation + execution
-            statusView.text = "🤖 Sending to AI..."
-            outputView.text = "🎙 Command: $command\n\n🤖 Asking AI for execution plan..."
+            addMessageToChatbot("🤖 Asking AI for execution plan...", isUser = false)
 
             try {
                 val (aiStatus, aiOutput) = withContext(Dispatchers.IO) {
                     sendVoiceTaskCommandToAI(command)
                 }
-                statusView.text = aiStatus
-                outputView.text = "🎙 Command: $command\n\n$aiOutput"
+                addMessageToChatbot("$aiStatus\n$aiOutput", isUser = false)
             } catch (e: Exception) {
-                statusView.text = "❌ Failed"
-                outputView.text = "🎙 Command: $command\n\n❌ Error: ${e.message}"
-            }
-
-            if (keepListeningLoop && isAutoTaskerVisible) {
-                delay(650)
-                startVoiceCapture()
+                addMessageToChatbot("❌ Error: ${e.message}", isUser = false)
             }
         }
     }
