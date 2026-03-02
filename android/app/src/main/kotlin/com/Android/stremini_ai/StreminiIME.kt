@@ -16,8 +16,6 @@ import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
-import android.view.animation.AccelerateDecelerateInterpolator
-import android.view.animation.DecelerateInterpolator
 import android.widget.PopupMenu
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -42,9 +40,6 @@ class StreminiIME : InputMethodService() {
 
     private val imeBackendClient = IMEBackendClient()
 
-    // Animation Helpers (Pre-allocated for performance)
-    private val pressInterpolator = DecelerateInterpolator()
-    private val releaseInterpolator = AccelerateDecelerateInterpolator()
     private val handler = Handler(Looper.getMainLooper())
 
     // State
@@ -115,7 +110,7 @@ class StreminiIME : InputMethodService() {
         override fun run() {
             if (isBackspacePressed) {
                 handleBackspace()
-                handler.postDelayed(this, 50) // 50ms = 20 chars/sec deletion speed
+                handler.postDelayed(this, 40) // 40ms = 25 chars/sec deletion speed
             }
         }
     }
@@ -150,7 +145,7 @@ class StreminiIME : InputMethodService() {
         symbolsKeyView = view.findViewById(R.id.key_symbols)
         enterKeyView = view.findViewById(R.id.key_enter)
 
-        muteKeyboardSoundEffects(view)
+        disableSoundEffects(view)
 
         // 1. Attach key listeners
         alphaNumericKeyMap.forEach { (id, char) ->
@@ -196,7 +191,7 @@ class StreminiIME : InputMethodService() {
                     animateKey(v, true)
                     isBackspacePressed = true
                     handleBackspace()
-                    handler.postDelayed(backspaceRunnable, 400) // Wait 400ms before repeating
+                    handler.postDelayed(backspaceRunnable, 500) // Wait before repeating
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     animateKey(v, false)
@@ -283,12 +278,12 @@ class StreminiIME : InputMethodService() {
         updateKeyboardModeUi()
     }
 
-    private fun muteKeyboardSoundEffects(root: View) {
+    private fun disableSoundEffects(root: View) {
         root.isSoundEffectsEnabled = false
         root.isHapticFeedbackEnabled = true
         (root as? android.view.ViewGroup)?.let { group ->
             for (i in 0 until group.childCount) {
-                muteKeyboardSoundEffects(group.getChildAt(i))
+                disableSoundEffects(group.getChildAt(i))
             }
         }
     }
@@ -342,7 +337,7 @@ class StreminiIME : InputMethodService() {
         
         ic.commitText(output, 1)
         if (aiActionJob?.isActive == true) {
-            serviceScope.coroutineContext.cancelChildren(CancellationException("User continued typing"))
+            serviceScope.coroutineContext.cancelChildren()
         }
 
         // Auto-turn off shift after one char
@@ -593,14 +588,13 @@ class StreminiIME : InputMethodService() {
 
     private fun animateKey(view: View, isPressed: Boolean) {
         val scale = if (isPressed) 0.92f else 1.0f
-        val duration = if (isPressed) 30L else 60L // Extra-snappy for smoother perceived input latency
+        val duration = if (isPressed) 50L else 80L
 
         view.animate().cancel()
         view.animate()
             .scaleX(scale)
             .scaleY(scale)
             .setDuration(duration)
-            .setInterpolator(if (isPressed) pressInterpolator else releaseInterpolator)
             .start()
     }
 
