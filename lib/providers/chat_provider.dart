@@ -1,10 +1,19 @@
 import 'dart:async';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
-import '../models/message_model.dart';
-import '../services/api_service.dart';
+import 'dart:convert';
 
-// ── Document context ──────────────────────────────────────────────────────────
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../core/network/base_client.dart';
+import '../features/chat/data/chat_client.dart';
+import '../features/chat/data/chat_repository_impl.dart';
+import '../features/chat/domain/chat_repository.dart';
+import '../features/chat/domain/send_chat_message_usecase.dart';
+import '../features/chat/domain/send_document_chat_message_usecase.dart';
+import '../features/chat/presentation/chat_state.dart';
+import '../models/message_model.dart';
+
 class DocumentContext {
   final String fileName;
   final String text;
@@ -12,30 +21,84 @@ class DocumentContext {
   const DocumentContext({required this.fileName, required this.text});
 }
 
-final documentContextProvider =
-    StateProvider<DocumentContext?>((ref) => null);
+final documentContextProvider = StateProvider<DocumentContext?>((ref) => null);
 
-// ── Chat notifier ─────────────────────────────────────────────────────────────
+final httpClientProvider = Provider<http.Client>((ref) => http.Client());
+final baseClientProvider = Provider<BaseClient>((ref) => BaseClient(ref.watch(httpClientProvider)));
+final chatClientProvider = Provider<ChatClient>((ref) => ChatClient(ref.watch(baseClientProvider)));
+final chatRepositoryProvider = Provider<ChatRepository>((ref) => ChatRepositoryImpl(ref.watch(chatClientProvider)));
+final sendChatMessageUseCaseProvider = Provider<SendChatMessageUseCase>((ref) => SendChatMessageUseCase(ref.watch(chatRepositoryProvider)));
+final sendDocumentChatMessageUseCaseProvider = Provider<SendDocumentChatMessageUseCase>((ref) => SendDocumentChatMessageUseCase(ref.watch(chatRepositoryProvider)));
+
+final chatStateProvider = StateProvider<ChatState>(
+  (ref) => ChatState(messages: const []),
+);
+
 class ChatNotifier extends AsyncNotifier<List<Message>> {
   static const String _initialGreetingId = 'initial_greeting';
+  static const String _persistenceKey = 'chat_messages_v1';
 
   @override
-  FutureOr<List<Message>> build() {
-    return [
-      Message(
+  FutureOr<List<Message>> build() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_persistenceKey);
+
+    List<Message> messages;
+    if (raw == null || raw.isEmpty) {
+      messages = [_greeting()];
+    } else {
+      final decoded = (jsonDecode(raw) as List)
+          .cast<Map<String, dynamic>>()
+          .map(_fromJson)
+          .toList();
+      messages = decoded.isEmpty ? [_greeting()] : decoded;
+    }
+
+    ref.read(chatStateProvider.notifier).state = ChatState(messages: messages);
+    return messages;
+  }
+
+  Message _greeting() => Message(
         id: _initialGreetingId,
         text: "Hello! I'm Stremini AI. How can I help you today?",
         type: MessageType.bot,
         timestamp: DateTime.now(),
-      )
-    ];
+      );
+
+  Map<String, dynamic> _toJson(Message m) => {
+        'id': m.id,
+        'text': m.text,
+        'type': m.type.name,
+        'timestamp': m.timestamp.toIso8601String(),
+      };
+
+  Message _fromJson(Map<String, dynamic> j) {
+    final typeName = (j['type'] as String?) ?? MessageType.bot.name;
+    final type = MessageType.values.firstWhere(
+      (e) => e.name == typeName,
+      orElse: () => MessageType.bot,
+    );
+    return Message(
+      id: (j['id'] ?? '').toString(),
+      text: (j['text'] ?? '').toString(),
+      type: type,
+      timestamp: DateTime.tryParse((j['timestamp'] ?? '').toString()) ?? DateTime.now(),
+    );
   }
 
-  List<Map<String, dynamic>> _getHistory() {
-    final currentMessages = state.value ?? [];
-    final history = <Map<String, dynamic>>[];
+  Future<void> _persist(List<Message> messages) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _persistenceKey,
+      jsonEncode(messages.map(_toJson).toList()),
+    );
+    ref.read(chatStateProvider.notifier).state =
+        ref.read(chatStateProvider).copyWith(messages: messages, errorMessage: null);
+  }
 
-    for (var msg in currentMessages) {
+  List<Map<String, dynamic>> _getHistory(List<Message> messages) {
+    final history = <Map<String, dynamic>>[];
+    for (final msg in messages) {
       if (msg.id == _initialGreetingId ||
           msg.type == MessageType.typing ||
           msg.type == MessageType.documentBanner ||
@@ -44,17 +107,13 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
         continue;
       }
       history.add({
-        "role": msg.type == MessageType.user ? 'user' : 'assistant',
-        "content": msg.text,
+        'role': msg.type == MessageType.user ? 'user' : 'assistant',
+        'content': msg.text,
       });
     }
-
-    return history.length > 100
-        ? history.sublist(history.length - 100)
-        : history;
+    return history.length > 100 ? history.sublist(history.length - 100) : history;
   }
 
-  // Send a message. If a document is loaded, routes to the document endpoint.
   Future<void> sendMessage(
     String text, {
     String? attachment,
@@ -64,9 +123,8 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
     final trimmed = text.trim();
     if (trimmed.isEmpty && attachment == null) return;
 
-    final displayText =
-        trimmed.isEmpty ? "Sent an attachment: $fileName" : trimmed;
-
+    final current = [...(state.value ?? <Message>[])];
+    final displayText = trimmed.isEmpty ? 'Sent an attachment: $fileName' : trimmed;
     final userMessage = Message(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       text: displayText,
@@ -74,37 +132,32 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
       timestamp: DateTime.now(),
     );
 
-    final history = _getHistory();
-    final current = state.value ?? <Message>[];
-    final filtered = current.where((m) => m.id != _initialGreetingId).toList();
-    state = AsyncValue.data([...filtered, userMessage]);
-
+    final next = [...current.where((m) => m.id != _initialGreetingId), userMessage];
+    state = AsyncValue.data(next);
     addTypingIndicator();
+    ref.read(chatStateProvider.notifier).state =
+        ref.read(chatStateProvider).copyWith(isLoading: true, messages: state.value ?? []);
 
     try {
-      final api = ref.read(apiServiceProvider);
+      final history = _getHistory(next);
       final docCtx = ref.read(documentContextProvider);
 
-      String reply;
-      if (docCtx != null && trimmed.isNotEmpty) {
-        reply = await api.sendDocumentMessage(
-          documentText: docCtx.text,
-          question: trimmed,
-          history: history,
-        );
-      } else {
-        reply = await api.sendMessage(
-          trimmed,
-          attachment: attachment,
-          mimeType: mimeType,
-          fileName: fileName,
-          history: history,
-        );
-      }
+      final reply = (docCtx != null && trimmed.isNotEmpty)
+          ? await ref.read(sendDocumentChatMessageUseCaseProvider)(
+              documentText: docCtx.text,
+              question: trimmed,
+              history: history,
+            )
+          : await ref.read(sendChatMessageUseCaseProvider)(
+              message: trimmed,
+              attachment: attachment,
+              mimeType: mimeType,
+              fileName: fileName,
+              history: history,
+            );
 
       removeTypingIndicator();
-
-      state = AsyncValue.data([
+      final updated = [
         ...(state.value ?? []),
         Message(
           id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -112,10 +165,14 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
           type: MessageType.bot,
           timestamp: DateTime.now(),
         ),
-      ]);
+      ];
+      state = AsyncValue.data(updated);
+      await _persist(updated);
+      ref.read(chatStateProvider.notifier).state =
+          ref.read(chatStateProvider).copyWith(isLoading: false);
     } catch (e) {
       removeTypingIndicator();
-      state = AsyncValue.data([
+      final updated = [
         ...(state.value ?? []),
         Message(
           id: DateTime.now().toString(),
@@ -123,34 +180,36 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
           type: MessageType.bot,
           timestamp: DateTime.now(),
         ),
-      ]);
+      ];
+      state = AsyncValue.data(updated);
+      await _persist(updated);
+      ref.read(chatStateProvider.notifier).state =
+          ref.read(chatStateProvider).copyWith(isLoading: false, errorMessage: e.toString());
     }
   }
 
-  // Load a document and pin it into context.
   void loadDocument(DocumentContext doc) {
     ref.read(documentContextProvider.notifier).state = doc;
-
     final banner = Message(
       id: 'doc_${DateTime.now().millisecondsSinceEpoch}',
-      text:
-          '📄 Document loaded: ${doc.fileName}\nAsk anything about it. Tap × in the banner to clear.',
+      text: '📄 Document loaded: ${doc.fileName}\nAsk anything about it. Tap × in the banner to clear.',
       type: MessageType.documentBanner,
       timestamp: DateTime.now(),
     );
 
-    final current = state.value ?? <Message>[];
-    state = AsyncValue.data([
-      ...current.where((m) => m.id != _initialGreetingId),
+    final updated = [
+      ...(state.value ?? []).where((m) => m.id != _initialGreetingId),
       banner,
-    ]);
+    ];
+    state = AsyncValue.data(updated);
+    _persist(updated);
+    ref.read(chatStateProvider.notifier).state =
+        ref.read(chatStateProvider).copyWith(activeDocumentName: doc.fileName);
   }
 
-  // Remove document context and return to normal chat.
   void clearDocument() {
     ref.read(documentContextProvider.notifier).state = null;
-
-    state = AsyncValue.data([
+    final updated = [
       ...(state.value ?? []),
       Message(
         id: 'doc_clear_${DateTime.now().millisecondsSinceEpoch}',
@@ -158,7 +217,11 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
         type: MessageType.bot,
         timestamp: DateTime.now(),
       ),
-    ]);
+    ];
+    state = AsyncValue.data(updated);
+    _persist(updated);
+    ref.read(chatStateProvider.notifier).state =
+        ref.read(chatStateProvider).copyWith(activeDocumentName: null);
   }
 
   void addTypingIndicator() {
@@ -166,30 +229,21 @@ class ChatNotifier extends AsyncNotifier<List<Message>> {
     if (current.any((m) => m.type == MessageType.typing)) return;
     state = AsyncValue.data([
       ...current,
-      Message(
-          id: 'typing',
-          text: '...',
-          type: MessageType.typing,
-          timestamp: DateTime.now()),
+      Message(id: 'typing', text: '...', type: MessageType.typing, timestamp: DateTime.now()),
     ]);
   }
 
   void removeTypingIndicator() {
     final current = state.value ?? <Message>[];
-    state = AsyncValue.data(
-        current.where((m) => m.type != MessageType.typing).toList());
+    state = AsyncValue.data(current.where((m) => m.type != MessageType.typing).toList());
   }
 
   Future<void> clearChat() async {
     ref.read(documentContextProvider.notifier).state = null;
-    state = AsyncValue.data([
-      Message(
-        id: _initialGreetingId,
-        text: "Hello! I'm Stremini AI. How can I help you today?",
-        type: MessageType.bot,
-        timestamp: DateTime.now(),
-      )
-    ]);
+    final updated = [_greeting()];
+    state = AsyncValue.data(updated);
+    await _persist(updated);
+    ref.read(chatStateProvider.notifier).state = ChatState(messages: updated);
   }
 }
 
