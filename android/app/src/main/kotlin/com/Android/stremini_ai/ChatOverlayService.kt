@@ -12,13 +12,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
-import android.Manifest
-import android.content.pm.PackageManager
 import android.os.Build
 import android.os.IBinder
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -27,27 +22,14 @@ import android.view.WindowManager
 import android.view.animation.AccelerateInterpolator
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
 import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.ScrollView
-import android.widget.TextView
 import android.widget.Toast
-import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -71,24 +53,16 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private lateinit var overlayView: View
     private lateinit var params: WindowManager.LayoutParams
 
-    private var floatingChatView: View? = null
-    private var floatingChatParams: WindowManager.LayoutParams? = null
-    private var isChatbotVisible = false
 
     private lateinit var bubbleIcon: ImageView
     private lateinit var menuItems: List<ImageView>
     private var isMenuExpanded = false
 
-    private val activeFeatures = mutableSetOf<Int>()
+    private lateinit var bubbleController: BubbleController
     private var isScannerActive = false
     private var isBubbleVisible = true
     private lateinit var inputMethodManager: InputMethodManager
 
-    private var autoTaskerView: View? = null
-    private var autoTaskerParams: WindowManager.LayoutParams? = null
-    private var speechRecognizer: SpeechRecognizer? = null
-    private var isAutoTaskerVisible = false
-    private var keepListeningLoop = false
 
     private var initialX = 0
     private var initialY = 0
@@ -115,6 +89,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     private var isBubbleIdle = false
     private var idleAnimator: ValueAnimator? = null
     private var preIdleX = 0
+    private lateinit var idleAnimationController: IdleAnimationController
     private val IDLE_TIMEOUT_MS = 3000L
     private val IDLE_SCALE = 0.6f
     private val IDLE_ALPHA = 0.4f
@@ -154,8 +129,12 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         inputMethodManager = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        aiBackendClient = AIBackendClient(client)
+        deviceCommandRouter = DeviceCommandRouter()
         startForegroundService()
         setupOverlay()
+        floatingChatController = FloatingChatController(this, windowManager, serviceScope, aiBackendClient, deviceCommandRouter)
+        voiceController = VoiceController(this, windowManager, serviceScope, deviceCommandRouter, aiBackendClient)
 
         val filter = IntentFilter().apply {
             addAction(ACTION_SEND_MESSAGE)
@@ -188,6 +167,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         if (isMenuExpanded) collapseMenu()
         // Cancel idle timer
         idleRunnable?.let { idleHandler.removeCallbacks(it) }
+        if (::idleAnimationController.isInitialized) idleAnimationController.clear()
         overlayView.visibility = View.GONE
         isBubbleVisible = false
         updateNotification()
@@ -216,6 +196,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
             overlayView.findViewById(R.id.btn_scanner),
             overlayView.findViewById(R.id.btn_keyboard)
         )
+        bubbleController = BubbleController(menuItems, WHITE)
 
         val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -277,6 +258,18 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         }
         overlayView.requestLayout()
 
+        idleAnimationController = IdleAnimationController(
+            overlayView = overlayView,
+            bubbleIcon = bubbleIcon,
+            params = params,
+            windowManager = windowManager,
+            bubbleSizePxProvider = { dpToPx(bubbleSizeDp).toFloat() },
+            bubbleX = { bubbleScreenX },
+            bubbleY = { bubbleScreenY },
+            setBubbleX = { bubbleScreenX = it },
+            isInteractionBlocked = { isMenuExpanded || isDragging || isMenuAnimating }
+        )
+
         // Start idle timer after setup
         resetIdleTimer()
     }
@@ -286,679 +279,58 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     // ==========================================
 
     private fun resetIdleTimer() {
-        // Cancel any pending idle callback
-        idleRunnable?.let { idleHandler.removeCallbacks(it) }
-
-        // If currently idle, restore bubble first
-        if (isBubbleIdle) {
-            restoreBubble()
-        }
-
-        // Schedule new idle callback
-        idleRunnable = Runnable {
-            if (!isMenuExpanded && !isDragging && !isMenuAnimating) {
-                shrinkBubble()
-            }
-        }
-        idleHandler.postDelayed(idleRunnable!!, IDLE_TIMEOUT_MS)
-    }
-
-    private fun shrinkBubble() {
-        if (isBubbleIdle) return
-        isBubbleIdle = true
-
-        // Animate the icon scale and alpha
-        bubbleIcon.animate()
-            .scaleX(IDLE_SCALE)
-            .scaleY(IDLE_SCALE)
-            .alpha(IDLE_ALPHA)
-            .setDuration(IDLE_ANIM_DURATION)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
-
-        // Animate the window position to partially hide off the screen edge
-        preIdleX = bubbleScreenX
-        val screenWidth = resources.displayMetrics.widthPixels
-        val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
-        val collapsedWindowSizePx = bubbleSizePx + dpToPx(10f)
-        val windowHalfSize = collapsedWindowSizePx / 2
-
-        // Determine if it's closer to the left or right edge
-        val targetX = if (bubbleScreenX > screenWidth / 2) {
-            // Right edge: hide part of the shrunken bubble (adjust 0.4f to control how much is hidden)
-            screenWidth - (bubbleSizePx / 2).toInt() + (bubbleSizePx * 0.4f).toInt()
-        } else {
-            // Left edge: hide part of the shrunken bubble
-            (bubbleSizePx / 2).toInt() - (bubbleSizePx * 0.4f).toInt()
-        }
-        
-        idleAnimator?.cancel()
-        idleAnimator = ValueAnimator.ofInt(bubbleScreenX, targetX).apply {
-            duration = IDLE_ANIM_DURATION
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { animator ->
-                if (isDragging || isMenuExpanded || isMenuAnimating) {
-                    cancel()
-                    return@addUpdateListener
-                }
-                bubbleScreenX = animator.animatedValue as Int
-                params.x = (bubbleScreenX - windowHalfSize).toInt()
-                try { windowManager.updateViewLayout(overlayView, params) } catch (e: Exception) {}
-            }
-            start()
+        if (::idleAnimationController.isInitialized) {
+            idleAnimationController.resetIdleTimer(IDLE_TIMEOUT_MS)
         }
     }
 
-    private fun restoreBubble() {
-        if (!isBubbleIdle) return
-        isBubbleIdle = false
-        
-        // Restore scale and alpha
-        bubbleIcon.animate()
-            .scaleX(1f)
-            .scaleY(1f)
-            .alpha(1f)
-            .setDuration(200L)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
+    private fun shrinkBubble() = Unit
 
-        // Restore window position
-        idleAnimator?.cancel()
-        
-        val bubbleSizePx = dpToPx(bubbleSizeDp).toFloat()
-        val screenWidth = resources.displayMetrics.widthPixels
-        val collapsedWindowSizePx = bubbleSizePx + dpToPx(10f)
-        val windowHalfSize = collapsedWindowSizePx / 2
+    private fun restoreBubble() = Unit
 
-        // Calculate normal resting edge
-        val targetX = if (preIdleX > screenWidth / 2) {
-            screenWidth - (bubbleSizePx / 2).toInt()
-        } else {
-            (bubbleSizePx / 2).toInt()
-        }
-
-        idleAnimator = ValueAnimator.ofInt(bubbleScreenX, targetX).apply {
-            duration = 200L
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { animator ->
-                if (isDragging) {
-                    cancel()
-                    return@addUpdateListener
-                }
-                bubbleScreenX = animator.animatedValue as Int
-                params.x = (bubbleScreenX - windowHalfSize).toInt()
-                try { windowManager.updateViewLayout(overlayView, params) } catch (e: Exception) {}
-            }
-            start()
-        }
-    }
 
     // ==========================================
-    // CHATBOT
+    // CHATBOT + VOICE (Controller-driven)
     // ==========================================
+
+    private lateinit var aiBackendClient: AIBackendClient
+    private lateinit var deviceCommandRouter: DeviceCommandRouter
+    private lateinit var floatingChatController: FloatingChatController
+    private lateinit var voiceController: VoiceController
 
     private fun handleAIChat() {
-        toggleFeature(menuItems[2].id)
-        if (isFeatureActive(menuItems[2].id)) showFloatingChatbot()
-        else hideFloatingChatbot()
-    }
-
-    private fun showFloatingChatbot() {
-        if (isChatbotVisible) return
-        floatingChatView = LayoutInflater.from(this).inflate(R.layout.floating_chatbot_layout, null)
-
-        val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-
-        floatingChatParams = WindowManager.LayoutParams(
-            dpToPx(300f), dpToPx(400f), typeParam,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
-                    WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT
-        )
-        floatingChatParams?.gravity = Gravity.BOTTOM or Gravity.END
-        floatingChatParams?.x = dpToPx(20f); floatingChatParams?.y = dpToPx(100f)
-        floatingChatView?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        setupFloatingChatListeners()
-        windowManager.addView(floatingChatView, floatingChatParams)
-        isChatbotVisible = true
-        addMessageToChatbot("Hello! I'm Stremini AI.", isUser = false)
-    }
-
-    private fun setupFloatingChatListeners() {
-        floatingChatView?.let { view ->
-            val header = view.findViewById<LinearLayout>(R.id.chat_header)
-            var chatInitialX = 0; var chatInitialY = 0
-            var chatInitialTouchX = 0f; var chatInitialTouchY = 0f
-            var chatIsDragging = false
-
-            header?.setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        chatInitialTouchX = event.rawX; chatInitialTouchY = event.rawY
-                        chatInitialX = floatingChatParams?.x ?: 0; chatInitialY = floatingChatParams?.y ?: 0
-                        chatIsDragging = true
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        if (chatIsDragging && floatingChatParams != null) {
-                            floatingChatParams?.x = chatInitialX - (event.rawX - chatInitialTouchX).toInt()
-                            floatingChatParams?.y = chatInitialY - (event.rawY - chatInitialTouchY).toInt()
-                            windowManager.updateViewLayout(floatingChatView!!, floatingChatParams!!)
-                        }
-                    }
-                    MotionEvent.ACTION_UP -> { chatIsDragging = false }
-                }
-                true
-            }
-
-            view.findViewById<ImageView>(R.id.btn_close_chat)?.setOnClickListener {
-                hideFloatingChatbot()
-                toggleFeature(menuItems[2].id)
-            }
-
-            view.findViewById<ImageView>(R.id.btn_send_message)?.setOnClickListener {
-                val input = view.findViewById<EditText>(R.id.et_chat_input)
-                val message = input?.text?.toString()?.trim()
-                if (!message.isNullOrEmpty()) {
-                    addMessageToChatbot(message, isUser = true)
-                    input.text?.clear()
-                    processUserCommand(message)
-                }
-            }
-
-            view.findViewById<ImageView>(R.id.btn_voice_input)?.setOnClickListener {
-                Toast.makeText(this, "Voice input coming soon", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    /**
-     * Smart command processor - routes to device control or AI chat
-     */
-    private fun processUserCommand(userMessage: String) {
-        val normalized = userMessage.trim().lowercase()
-
-        // Check if it's a device control command
-        val isDeviceCommand = DEVICE_COMMAND_KEYWORDS.any { keyword ->
-            normalized.startsWith(keyword) || normalized.contains(" $keyword ") || normalized.contains(" $keyword")
-        }
-
-        if (isDeviceCommand) {
-            addMessageToChatbot("⚙️ Executing: $userMessage", isUser = false)
-            serviceScope.launch {
-                val success = withContext(Dispatchers.IO) {
-                    try {
-                        ScreenReaderService.runGenericAutomation(userMessage)
-                        true
-                    } catch (e: Exception) { false }
-                }
-                // Give it a moment to execute then confirm
-                delay(1000)
-                if (success) {
-                    addMessageToChatbot("✅ Done! Command executed successfully.", isUser = false)
-                } else {
-                    // Fallback to AI for smart processing
-                    sendCommandToAIWithDeviceContext(userMessage)
-                }
+        bubbleController.toggleFeature(menuItems[2].id)
+        if (bubbleController.isFeatureActive(menuItems[2].id)) {
+            floatingChatController.show {
+                bubbleController.removeFeature(menuItems[2].id)
+                bubbleController.updateMenuItemsColor(isScannerActive)
             }
         } else {
-            // Regular AI chat
-            sendMessageToAPI(userMessage)
+            floatingChatController.hide()
         }
+        bubbleController.updateMenuItemsColor(isScannerActive)
     }
 
-    private val DEVICE_COMMAND_KEYWORDS = listOf(
-        "open", "launch", "close", "go to", "navigate to",
-        "tap", "click", "press", "scroll", "swipe",
-        "type", "write", "fill", "search for",
-        "call", "message", "send", "whatsapp",
-        "take screenshot", "screenshot",
-        "volume", "brightness", "mute", "unmute",
-        "go home", "go back", "recent apps",
-        "notifications", "settings",
-        "play", "pause", "stop", "next", "previous",
-        "zoom in", "zoom out",
-        "copy", "paste", "cut", "select all",
-        "find", "read screen"
-    )
-
-    private fun sendCommandToAIWithDeviceContext(command: String) {
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                // Get current screen context
-                val screenText = try { ScreenReaderService.getInstance()?.let { service ->
-                    val root = service.rootInActiveWindow
-                    val sb = StringBuilder()
-                    fun traverse(node: android.view.accessibility.AccessibilityNodeInfo) {
-                        val text = node.text?.toString() ?: node.contentDescription?.toString()
-                        if (!text.isNullOrBlank()) sb.appendLine(text.trim())
-                        for (i in 0 until node.childCount) node.getChild(i)?.let { traverse(it) }
-                    }
-                    root?.let { traverse(it) }
-                    sb.toString().take(1000)
-                } ?: "" } catch (e: Exception) { "" }
-
-                val requestJson = JSONObject().apply {
-                    put("message", command)
-                    put("screen_context", screenText)
-                    put("mode", "device_control")
-                }
-
-                val requestBody = requestJson.toString().toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/chat/message")
-                    .post(requestBody)
-                    .build()
-
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val responseBody = response.body?.string() ?: ""
-                    val json = JSONObject(responseBody)
-                    val reply = json.optString("reply", json.optString("response", json.optString("message", "Command processed")))
-                    withContext(Dispatchers.Main) { addMessageToChatbot(reply, isUser = false) }
-                } else {
-                    withContext(Dispatchers.Main) { addMessageToChatbot("❌ Could not process command (${response.code})", isUser = false) }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { addMessageToChatbot("⚠️ Network error: ${e.message}", isUser = false) }
+    private fun handleAutoTasker() {
+        bubbleController.toggleFeature(menuItems[0].id)
+        if (bubbleController.isFeatureActive(menuItems[0].id)) {
+            val opened = voiceController.show {
+                bubbleController.removeFeature(menuItems[0].id)
+                bubbleController.updateMenuItemsColor(isScannerActive)
             }
-        }
-    }
-
-    private fun sendMessageToAPI(userMessage: String) {
-        serviceScope.launch(Dispatchers.IO) {
-            try {
-                val requestBody = JSONObject().apply { put("message", userMessage) }
-                    .toString().toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/chat/message")
-                    .post(requestBody).build()
-                val response = client.newCall(request).execute()
-                if (response.isSuccessful) {
-                    val json = JSONObject(response.body?.string() ?: "")
-                    val reply = json.optString("reply", json.optString("response", json.optString("message", "No response")))
-                    withContext(Dispatchers.Main) { addMessageToChatbot(reply, isUser = false) }
-                } else {
-                    withContext(Dispatchers.Main) { addMessageToChatbot("❌ Server error: ${response.code}", isUser = false) }
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) { addMessageToChatbot("⚠️ Network error: ${e.message}", isUser = false) }
+            if (!opened) {
+                bubbleController.removeFeature(menuItems[0].id)
             }
+        } else {
+            voiceController.hide()
         }
+        bubbleController.updateMenuItemsColor(isScannerActive)
     }
 
     private fun addMessageToChatbot(message: String, isUser: Boolean) {
-        floatingChatView?.let { view ->
-            val messagesContainer = view.findViewById<LinearLayout>(R.id.messages_container)
-            val messageView = LayoutInflater.from(this).inflate(
-                if (isUser) R.layout.message_bubble_user else R.layout.message_bubble_bot,
-                messagesContainer, false
-            )
-            messageView.findViewById<TextView>(R.id.tv_message)?.text = message
-            messagesContainer?.addView(messageView)
-            view.findViewById<ScrollView>(R.id.scroll_messages)?.post {
-                view.findViewById<ScrollView>(R.id.scroll_messages)?.fullScroll(View.FOCUS_DOWN)
-            }
+        if (::floatingChatController.isInitialized) {
+            floatingChatController.addMessage(message, isUser)
         }
-    }
-
-    private fun hideFloatingChatbot() {
-        if (!isChatbotVisible) return
-        floatingChatView?.let { windowManager.removeView(it) }
-        floatingChatView = null; floatingChatParams = null; isChatbotVisible = false
-    }
-
-    // ==========================================
-    // AUTO TASKER (Voice Command)
-    // ==========================================
-
-    private fun showAutoTasker(): Boolean {
-        if (isAutoTaskerVisible) return true
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "Microphone permission required. Opening settings...", Toast.LENGTH_LONG).show()
-            try {
-                startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = android.net.Uri.parse("package:$packageName")
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-            } catch (_: Exception) {}
-            return false
-        }
-
-        autoTaskerView = LayoutInflater.from(this).inflate(R.layout.auto_tasker_overlay, null)
-        val typeParam = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
-
-        autoTaskerParams = WindowManager.LayoutParams(
-            dpToPx(320f), dpToPx(480f), typeParam,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.CENTER }
-
-        autoTaskerView?.findViewById<ImageView>(R.id.btn_close_tasker)?.setOnClickListener {
-            hideAutoTasker()
-            activeFeatures.remove(menuItems[0].id)
-            updateMenuItemsColor()
-        }
-        autoTaskerView?.findViewById<ImageView>(R.id.btn_start_listening)?.setOnClickListener {
-            startVoiceCapture()
-        }
-
-        windowManager.addView(autoTaskerView, autoTaskerParams)
-        isAutoTaskerVisible = true
-        keepListeningLoop = true
-        startVoiceCapture()
-        return true
-    }
-
-    private fun hideAutoTasker() {
-        keepListeningLoop = false
-        speechRecognizer?.destroy(); speechRecognizer = null
-        autoTaskerView?.let { windowManager.removeView(it) }
-        autoTaskerView = null; autoTaskerParams = null; isAutoTaskerVisible = false
-    }
-
-    private fun startVoiceCapture() {
-        val view = autoTaskerView ?: return
-        val status = view.findViewById<TextView>(R.id.tv_tasker_status)
-        status.text = "Listening..."
-        speechRecognizer?.destroy()
-
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            status.text = "Speech recognition not available on this device"
-            return
-        }
-
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-            setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: android.os.Bundle?) { status.text = "Speak now..." }
-                override fun onBeginningOfSpeech() { status.text = "Listening..." }
-                override fun onRmsChanged(rmsdB: Float) {}
-                override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { status.text = "Processing your command..." }
-                override fun onError(error: Int) {
-                    status.text = "Voice capture failed ($error). Retrying..."
-                    if (keepListeningLoop && isAutoTaskerVisible) {
-                        serviceScope.launch { delay(700); startVoiceCapture() }
-                    }
-                }
-                override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
-                override fun onPartialResults(partialResults: android.os.Bundle?) {}
-                override fun onResults(results: android.os.Bundle?) {
-                    val command = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
-                    if (command.isNullOrBlank()) {
-                        status.text = "Could not understand. Try again."
-                        if (keepListeningLoop && isAutoTaskerVisible) {
-                            serviceScope.launch { delay(500); startVoiceCapture() }
-                        }
-                    } else {
-                        status.text = "Understood: $command"
-                        view.findViewById<TextView>(R.id.tv_tasker_output).text = "🎙 Command: $command\n\n⚙️ Executing..."
-                        executeVoiceCommand(command)
-                    }
-                }
-            })
-        }
-
-        speechRecognizer?.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        })
-    }
-
-    /**
-     * Main voice command execution - routes to device control then AI fallback
-     */
-    private fun executeVoiceCommand(command: String) {
-        serviceScope.launch {
-            val view = autoTaskerView ?: return@launch
-            val statusView = view.findViewById<TextView>(R.id.tv_tasker_status)
-            val outputView = view.findViewById<TextView>(R.id.tv_tasker_output)
-
-            // 1. Try direct device automation first
-            val directResult = withContext(Dispatchers.IO) {
-                tryDirectDeviceCommand(command)
-            }
-
-            if (directResult.executed) {
-                statusView.text = "✅ ${directResult.statusMessage}"
-                outputView.text = "🎙 Command: $command\n\n✅ ${directResult.details}"
-                return@launch
-            }
-
-            // 2. Try AI backend for smart plan generation + execution
-            statusView.text = "🤖 Sending to AI..."
-            outputView.text = "🎙 Command: $command\n\n🤖 Asking AI for execution plan..."
-
-            try {
-                val (aiStatus, aiOutput) = withContext(Dispatchers.IO) {
-                    sendVoiceTaskCommandToAI(command)
-                }
-                statusView.text = aiStatus
-                outputView.text = "🎙 Command: $command\n\n$aiOutput"
-            } catch (e: Exception) {
-                statusView.text = "❌ Failed"
-                outputView.text = "🎙 Command: $command\n\n❌ Error: ${e.message}"
-            }
-
-            if (keepListeningLoop && isAutoTaskerVisible) {
-                delay(650)
-                startVoiceCapture()
-            }
-        }
-    }
-
-    data class DirectCommandResult(
-        val executed: Boolean,
-        val statusMessage: String,
-        val details: String
-    )
-
-    private suspend fun tryDirectDeviceCommand(command: String): DirectCommandResult {
-        val normalized = command.trim().lowercase()
-
-        return when {
-            // WhatsApp messaging
-            normalized.contains("whatsapp") && (normalized.contains("message") || normalized.contains("send")) -> {
-                val contact = extractContact(command)
-                val message = extractMessage(command)
-                if (contact.isNotBlank()) {
-                    val sent = ScreenReaderService.runWhatsAppMessageAutomation(contact, message)
-                    delay(3000) // Wait for automation
-                    DirectCommandResult(true, "WhatsApp message sent to $contact", "Sent '$message' to $contact via WhatsApp")
-                } else {
-                    DirectCommandResult(false, "Contact not found", "Could not extract contact name from: $command")
-                }
-            }
-
-            // Open any app
-            normalized.startsWith("open ") || normalized.startsWith("launch ") -> {
-                val appName = normalized.removePrefix("open ").removePrefix("launch ").trim()
-                val service = ScreenReaderService.getInstance()
-                val opened = service?.openAppByName(appName) ?: false
-                if (opened) {
-                    DirectCommandResult(true, "Opened $appName", "App '$appName' launched successfully")
-                } else {
-                    DirectCommandResult(false, "App not found", "Could not find app: $appName")
-                }
-            }
-
-            // Navigation
-            normalized.contains("go home") || normalized == "home" -> {
-                ScreenReaderService.runGenericAutomation("go home")
-                DirectCommandResult(true, "Navigated home", "Pressed home button")
-            }
-            normalized.contains("go back") || normalized == "back" -> {
-                ScreenReaderService.runGenericAutomation("go back")
-                DirectCommandResult(true, "Navigated back", "Pressed back button")
-            }
-            normalized.contains("recent apps") -> {
-                ScreenReaderService.runGenericAutomation("recent apps")
-                DirectCommandResult(true, "Opened recent apps", "Showed app switcher")
-            }
-            normalized.contains("take screenshot") -> {
-                ScreenReaderService.runGenericAutomation("take screenshot")
-                DirectCommandResult(true, "Screenshot taken", "Screen captured")
-            }
-            normalized.contains("scroll down") -> {
-                ScreenReaderService.runGenericAutomation("scroll down")
-                DirectCommandResult(true, "Scrolled down", "Page scrolled down")
-            }
-            normalized.contains("scroll up") -> {
-                ScreenReaderService.runGenericAutomation("scroll up")
-                DirectCommandResult(true, "Scrolled up", "Page scrolled up")
-            }
-            normalized.startsWith("swipe ") -> {
-                val dir = normalized.removePrefix("swipe ").trim()
-                ScreenReaderService.runGenericAutomation("swipe $dir")
-                DirectCommandResult(true, "Swiped $dir", "Gesture performed: swipe $dir")
-            }
-            normalized.startsWith("tap ") || normalized.startsWith("click ") -> {
-                ScreenReaderService.runGenericAutomation(command)
-                delay(500)
-                DirectCommandResult(true, "Tapped element", "Tapped: ${normalized.removePrefix("tap ").removePrefix("click ")}")
-            }
-            normalized.startsWith("type ") -> {
-                ScreenReaderService.runGenericAutomation(command)
-                DirectCommandResult(true, "Text typed", "Typed: ${normalized.removePrefix("type ")}")
-            }
-            normalized.startsWith("search for ") || normalized.startsWith("search ") -> {
-                ScreenReaderService.runGenericAutomation(command)
-                delay(500)
-                DirectCommandResult(true, "Search performed", "Searched for: ${normalized.removePrefix("search for ").removePrefix("search ")}")
-            }
-            normalized.contains("volume up") -> {
-                ScreenReaderService.runGenericAutomation("volume up")
-                DirectCommandResult(true, "Volume increased", "Volume turned up")
-            }
-            normalized.contains("volume down") -> {
-                ScreenReaderService.runGenericAutomation("volume down")
-                DirectCommandResult(true, "Volume decreased", "Volume turned down")
-            }
-            normalized.contains("mute") -> {
-                ScreenReaderService.runGenericAutomation("mute")
-                DirectCommandResult(true, "Device muted", "Ringer set to silent")
-            }
-            normalized.startsWith("call ") -> {
-                ScreenReaderService.runGenericAutomation(command)
-                DirectCommandResult(true, "Calling...", "Initiating call to ${normalized.removePrefix("call ").trim()}")
-            }
-            normalized.startsWith("go to ") || normalized.startsWith("open website") || normalized.startsWith("browse to ") -> {
-                ScreenReaderService.runGenericAutomation(command)
-                DirectCommandResult(true, "Opening website", "Loading ${command.substringAfterLast(" ")}")
-            }
-            normalized.contains("open settings") || normalized.contains("wifi") ||
-            normalized.contains("bluetooth") || normalized.contains("display settings") -> {
-                ScreenReaderService.runGenericAutomation(command)
-                DirectCommandResult(true, "Opened settings", "Settings opened")
-            }
-            normalized.contains("lock") -> {
-                ScreenReaderService.runGenericAutomation("lock screen")
-                DirectCommandResult(true, "Screen locked", "Device locked")
-            }
-
-            else -> DirectCommandResult(false, "Not a device command", "Sending to AI backend...")
-        }
-    }
-
-    private fun extractContact(command: String): String {
-        val patterns = listOf(
-            Regex("(?:message|send|whatsapp)\\s+(?:to\\s+)?([a-zA-Z][a-zA-Z0-9 _.-]{1,30})(?:\\s+(?:that|saying|:|-|,)|\\s*\$)", RegexOption.IGNORE_CASE),
-            Regex("to\\s+([a-zA-Z][a-zA-Z0-9 _.-]{1,30})(?:\\s+(?:that|saying)|\\s*\$)", RegexOption.IGNORE_CASE)
-        )
-        for (pattern in patterns) {
-            val match = pattern.find(command)
-            if (match != null) return match.groupValues[1].trim()
-        }
-        return ""
-    }
-
-    private fun extractMessage(command: String): String {
-        val patterns = listOf(
-            Regex("(?:that|saying|message:|with message)\\s+(.+)\$", RegexOption.IGNORE_CASE),
-            Regex(":\\s*(.+)\$"),
-            Regex("-\\s*(.+)\$")
-        )
-        for (pattern in patterns) {
-            val match = pattern.find(command)
-            if (match != null) return match.groupValues[1].trim()
-        }
-        return "Hello"
-    }
-
-    private suspend fun sendVoiceTaskCommandToAI(command: String): Pair<String, String> {
-        val service = ScreenReaderService.getInstance()
-        if (service == null) {
-            return "❌ Accessibility service unavailable" to "Enable Stremini Screen Reader in Accessibility settings."
-        }
-
-        val maxAgentSteps = 8
-        var payload = JSONObject().apply {
-            put("query", command)
-            put("command", command)
-            put("step_index", 0)
-            put("screen_state", service.getVisibleScreenState())
-        }
-
-        repeat(maxAgentSteps) { index ->
-            val request = Request.Builder()
-                .url("https://ai-keyboard-backend.vishwajeetadkine705.workers.dev/classify-task")
-                .post(payload.toString().toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                return "❌ Server error ${response.code}" to "Failed to classify task."
-            }
-
-            val raw = response.body?.string().orEmpty()
-            val json = runCatching { JSONObject(raw) }.getOrElse {
-                return "❌ Invalid backend response" to raw
-            }
-
-            val steps = json.optJSONArray("steps")
-            if (steps != null && steps.length() > 0) {
-                val result = service.executeBackendSteps(steps)
-                val status = if (result.success) "✅ Task completed" else "⚠️ Task partially completed"
-                val output = buildString {
-                    appendLine("Task: ${json.optString("task", "unknown")}")
-                    appendLine("✅ Executed: ${result.completedSteps}")
-                    appendLine("❌ Failed: ${result.failedSteps}")
-                    appendLine()
-                    append(result.message)
-                }
-                return status to output
-            }
-
-            val nextStep = json.optJSONObject("next_step") ?: json.optJSONObject("action")
-            if (nextStep != null) {
-                val oneStep = org.json.JSONArray().put(nextStep)
-                val result = service.executeBackendSteps(oneStep)
-                if (!result.success) {
-                    return "❌ Step failed" to result.message
-                }
-            }
-
-            val done = json.optBoolean("done") || json.optBoolean("completed")
-            if (done) {
-                val summary = json.optString("summary", "Agentic loop completed")
-                return "✅ Task completed" to summary
-            }
-
-            payload = JSONObject().apply {
-                put("query", command)
-                put("command", command)
-                put("step_index", index + 1)
-                put("screen_state", service.getVisibleScreenState())
-                put("previous_response", json)
-            }
-        }
-
-        return "⚠️ Max steps reached" to "Stopped after MAX_AGENT_STEPS without completion."
     }
 
     // ==========================================
@@ -1002,48 +374,16 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         Toast.makeText(this, "Opening Stremini...", Toast.LENGTH_SHORT).show()
     }
 
-    private fun handleAutoTasker() {
-        toggleFeature(menuItems[0].id)
-        if (isFeatureActive(menuItems[0].id)) {
-            val opened = showAutoTasker()
-            if (!opened) { activeFeatures.remove(menuItems[0].id); updateMenuItemsColor() }
-        } else {
-            hideAutoTasker()
-        }
-    }
 
     private fun toggleFeature(featureId: Int) {
-        if (activeFeatures.contains(featureId)) activeFeatures.remove(featureId)
-        else activeFeatures.add(featureId)
-        updateMenuItemsColor()
+        bubbleController.toggleFeature(featureId)
+        bubbleController.updateMenuItemsColor(isScannerActive)
     }
 
-    private fun isFeatureActive(featureId: Int): Boolean = activeFeatures.contains(featureId)
+    private fun isFeatureActive(featureId: Int): Boolean = bubbleController.isFeatureActive(featureId)
 
     private fun updateMenuItemsColor() {
-        menuItems.forEach { item ->
-            if (activeFeatures.contains(item.id) || (item.id == menuItems[3].id && isScannerActive)) {
-                val layers = arrayOf(
-                    android.graphics.drawable.GradientDrawable().apply {
-                        shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(android.graphics.Color.BLACK)
-                    },
-                    android.graphics.drawable.GradientDrawable().apply {
-                        shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(android.graphics.Color.parseColor("#23A6E2"))
-                        alpha = 200
-                    }
-                )
-                item.background = android.graphics.drawable.LayerDrawable(layers)
-                item.setColorFilter(WHITE)
-            } else {
-                item.background = android.graphics.drawable.GradientDrawable().apply {
-                    shape = android.graphics.drawable.GradientDrawable.OVAL
-                    setColor(android.graphics.Color.BLACK)
-                }
-                item.setColorFilter(WHITE)
-            }
-        }
+        bubbleController.updateMenuItemsColor(isScannerActive)
     }
 
     // ==========================================
@@ -1273,9 +613,10 @@ class ChatOverlayService : Service(), View.OnTouchListener {
     override fun onDestroy() {
         super.onDestroy()
         idleRunnable?.let { idleHandler.removeCallbacks(it) }
+        if (::idleAnimationController.isInitialized) idleAnimationController.clear()
         serviceScope.cancel()
         unregisterReceiver(controlReceiver)
-        hideFloatingChatbot(); hideAutoTasker()
+        floatingChatController.hide(); voiceController.hide()
         if (::overlayView.isInitialized && overlayView.windowToken != null) windowManager.removeView(overlayView)
     }
 }

@@ -9,9 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.text.TextUtils
-import android.util.Log
 import android.widget.Toast
-import android.view.inputmethod.InputMethodManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import android.content.pm.PackageManager
@@ -28,6 +26,10 @@ class MainActivity : FlutterActivity() {
     private val scannerChannelName = "stremini.screen.scanner"
     
     private var eventSink: EventChannel.EventSink? = null
+    private val logTag = "MainActivity"
+
+    private val overlayGateway by lazy { OverlayServiceGateway(this) }
+    private val keyboardStateManager by lazy { KeyboardStateManager(this) }
 
     private val eventReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -105,8 +107,7 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "stopOverlayService" -> {
-                    val intent = Intent(this, ChatOverlayService::class.java)
-                    stopService(intent)
+                    overlayGateway.stopOverlayService()
                     result.success(true)
                 }
                 else -> result.notImplemented()
@@ -167,7 +168,7 @@ class MainActivity : FlutterActivity() {
                         startActivity(intent)
                         result.success(true)
                     } catch (e: Exception) {
-                        Log.e("MainActivity", "Error opening keyboard settings", e)
+                        AppLogger.e(logTag, "Error opening keyboard settings", e)
                         result.error("ERROR", "Failed to open keyboard settings: ${e.message}", null)
                     }
                 }
@@ -206,7 +207,7 @@ class MainActivity : FlutterActivity() {
                 Toast.makeText(this, "Please enable 'Display over other apps'", Toast.LENGTH_LONG).show()
             }
         } catch (e: Exception) {
-            Log.e("MainActivity", "Overlay setting error", e)
+            AppLogger.e(logTag, "Overlay setting error", e)
             Toast.makeText(this, "Error opening settings: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
@@ -239,7 +240,7 @@ class MainActivity : FlutterActivity() {
                 Toast.LENGTH_LONG
             ).show()
         } catch (e: Exception) {
-            Log.e("MainActivity", "Error opening accessibility settings", e)
+            AppLogger.e(logTag, "Error opening accessibility settings", e)
             Toast.makeText(this, "Error opening settings: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
@@ -263,96 +264,64 @@ class MainActivity : FlutterActivity() {
                 requestOverlayPermissionSafe()
                 return
             }
-            val intent = Intent(this, ChatOverlayService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+            overlayGateway.startOverlayService()
             Toast.makeText(this, "Floating bubble activated", Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
-            Log.e("MainActivity", "Overlay start error", e)
+            AppLogger.e(logTag, "Overlay start error", e)
             Toast.makeText(this, "Error starting service: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun startScreenScan() {
         try {
-            val intent = Intent(this, ScreenReaderService::class.java).apply {
-                action = ScreenReaderService.ACTION_START_SCAN
-            }
-            startService(intent)
+            overlayGateway.startScreenScan()
         } catch (e: Exception) {
-            Log.e("MainActivity", "Error starting scan", e)
+            AppLogger.e(logTag, "Error starting scan", e)
             Toast.makeText(this, "Error starting scan: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun stopScreenScan() {
         try {
-            val intent = Intent(this, ScreenReaderService::class.java).apply {
-                action = ScreenReaderService.ACTION_STOP_SCAN
-            }
-            startService(intent)
+            overlayGateway.stopScreenScan()
         } catch (e: Exception) {
-            Log.e("MainActivity", "Error stopping scan", e)
+            AppLogger.e(logTag, "Error stopping scan", e)
             Toast.makeText(this, "Error stopping scan: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     // Keyboard-related methods
     private fun isKeyboardEnabled(): Boolean {
-        return try {
-            val imeManager = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-            val enabledInputMethods = imeManager?.enabledInputMethodList ?: return false
-            val packageName = packageName
-            
-            enabledInputMethods.any { 
-                it.packageName == packageName 
-            }
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Error checking keyboard enabled", e)
-            false
-        }
+        return runCatching { keyboardStateManager.isKeyboardEnabled() }
+            .onFailure { AppLogger.e(logTag, "Error checking keyboard enabled", it) }
+            .getOrDefault(false)
     }
 
     private fun isKeyboardSelected(): Boolean {
-        return try {
-            val currentInputMethod = Settings.Secure.getString(
-                contentResolver,
-                Settings.Secure.DEFAULT_INPUT_METHOD
-            )
-            
-            currentInputMethod?.contains(packageName) == true
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Error checking keyboard selected", e)
-            false
-        }
+        return runCatching { keyboardStateManager.isKeyboardSelected() }
+            .onFailure { AppLogger.e(logTag, "Error checking keyboard selected", it) }
+            .getOrDefault(false)
     }
 
     private fun openKeyboardSettings() {
         try {
-            val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-            
+            keyboardStateManager.openKeyboardSettings()
             Toast.makeText(
                 this,
                 "Find 'Stremini AI Keyboard' and enable it",
                 Toast.LENGTH_LONG
             ).show()
         } catch (e: Exception) {
-            Log.e("MainActivity", "Error opening keyboard settings", e)
+            AppLogger.e(logTag, "Error opening keyboard settings", e)
             Toast.makeText(this, "Error opening settings: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun showKeyboardPicker() {
         try {
-            val imeManager = getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager
-            imeManager?.showInputMethodPicker()
+            keyboardStateManager.showInputMethodPicker()
         } catch (e: Exception) {
-            Log.e("MainActivity", "Error showing keyboard picker", e)
+            AppLogger.e(logTag, "Error showing keyboard picker", e)
             Toast.makeText(this, "Error showing picker: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
@@ -367,7 +336,7 @@ class MainActivity : FlutterActivity() {
                 registerReceiver(eventReceiver, filter)
             }
         } catch (e: Exception) {
-            Log.e("MainActivity", "Error registering receiver", e)
+            AppLogger.e(logTag, "Error registering receiver", e)
         }
     }
 
@@ -376,7 +345,7 @@ class MainActivity : FlutterActivity() {
         try { 
             unregisterReceiver(eventReceiver) 
         } catch (e: Exception) {
-            Log.e("MainActivity", "Error unregistering receiver", e)
+            AppLogger.e(logTag, "Error unregistering receiver", e)
         }
     }
 
