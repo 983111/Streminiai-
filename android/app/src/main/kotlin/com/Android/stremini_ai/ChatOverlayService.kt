@@ -661,27 +661,37 @@ class ChatOverlayService : Service(), View.OnTouchListener {
         autoTaskerView = null; autoTaskerParams = null; isAutoTaskerVisible = false
     }
 
+    /**
+     * Hide the large tasker panel but keep ongoing assistant loop active.
+     * This keeps screen capture unobstructed while voice control continues.
+     */
+    private fun dismissAutoTaskerPanelKeepLoop() {
+        speechRecognizer?.destroy(); speechRecognizer = null
+        autoTaskerView?.let { windowManager.removeView(it) }
+        autoTaskerView = null; autoTaskerParams = null; isAutoTaskerVisible = false
+    }
+
     private fun startVoiceCapture() {
-        val view = autoTaskerView ?: return
-        val status = view.findViewById<TextView>(R.id.tv_tasker_status)
-        status.text = "Listening..."
+        val status = autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_status)
+        status?.text = "Listening..."
         speechRecognizer?.destroy()
 
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            status.text = "Speech recognition not available on this device"
+            status?.text = "Speech recognition not available on this device"
+            addMessageToChatbot("❌ Speech recognition not available on this device", isUser = false)
             return
         }
 
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : RecognitionListener {
-                override fun onReadyForSpeech(params: android.os.Bundle?) { status.text = "Speak now..." }
-                override fun onBeginningOfSpeech() { status.text = "Listening..." }
+                override fun onReadyForSpeech(params: android.os.Bundle?) { status?.text = "Speak now..." }
+                override fun onBeginningOfSpeech() { status?.text = "Listening..." }
                 override fun onRmsChanged(rmsdB: Float) {}
                 override fun onBufferReceived(buffer: ByteArray?) {}
-                override fun onEndOfSpeech() { status.text = "Processing your command..." }
+                override fun onEndOfSpeech() { status?.text = "Processing your command..." }
                 override fun onError(error: Int) {
-                    status.text = "Voice capture failed ($error). Retrying..."
-                    if (keepListeningLoop && isAutoTaskerVisible) {
+                    status?.text = "Voice capture failed ($error). Retrying..."
+                    if (keepListeningLoop) {
                         serviceScope.launch { delay(700); startVoiceCapture() }
                     }
                 }
@@ -690,16 +700,15 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 override fun onResults(results: android.os.Bundle?) {
                     val command = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
                     if (command.isNullOrBlank()) {
-                        status.text = "Could not understand. Try again."
-                        if (keepListeningLoop && isAutoTaskerVisible) {
+                        status?.text = "Could not understand. Try again."
+                        if (keepListeningLoop) {
                             serviceScope.launch { delay(500); startVoiceCapture() }
                         }
                     } else {
-                        status.text = "Understood: $command"
-                        view.findViewById<TextView>(R.id.tv_tasker_output).text = "🎙 Command: $command\n\n⚙️ Executing..."
-                        // Close the large tasker overlay before automation starts.
-                        // This prevents the overlay from blocking accessibility capture.
-                        hideAutoTasker()
+                        status?.text = "Understood: $command"
+                        autoTaskerView?.findViewById<TextView>(R.id.tv_tasker_output)?.text = "🎙 Command: $command\n\n⚙️ Executing..."
+                        // Hide the large panel before automation starts, but keep assistant loop enabled.
+                        dismissAutoTaskerPanelKeepLoop()
                         executeVoiceCommand(command)
                     }
                 }
@@ -728,19 +737,35 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
             if (directResult.executed) {
                 addMessageToChatbot("✅ ${directResult.details}", isUser = false)
+                if (keepListeningLoop) {
+                    delay(650)
+                    startVoiceCapture()
+                }
                 return@launch
             }
 
-            // 2. Try AI backend for smart plan generation + execution
-            addMessageToChatbot("🤖 Asking AI for execution plan...", isUser = false)
+            // 2. Full agentic loop (observe → think → act) for whole-screen control
+            addMessageToChatbot("🤖 Running ongoing assistant loop...", isUser = false)
 
-            try {
-                val (aiStatus, aiOutput) = withContext(Dispatchers.IO) {
-                    sendVoiceTaskCommandToAI(command)
+            val service = ScreenReaderService.getInstance()
+            if (service == null) {
+                addMessageToChatbot("❌ Accessibility service unavailable", isUser = false)
+            } else {
+                try {
+                    val bridge = VoiceCommandBridge(service)
+                    bridge.execute(
+                        command = command,
+                        onStatus = { status -> addMessageToChatbot("⚙️ $status", isUser = false) },
+                        onOutput = { output -> addMessageToChatbot(output, isUser = false) }
+                    )
+                } catch (e: Exception) {
+                    addMessageToChatbot("❌ Error: ${e.message}", isUser = false)
                 }
-                addMessageToChatbot("$aiStatus\n$aiOutput", isUser = false)
-            } catch (e: Exception) {
-                addMessageToChatbot("❌ Error: ${e.message}", isUser = false)
+            }
+
+            if (keepListeningLoop) {
+                delay(650)
+                startVoiceCapture()
             }
         }
     }
