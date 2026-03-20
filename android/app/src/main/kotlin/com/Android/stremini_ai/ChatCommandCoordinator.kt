@@ -6,49 +6,30 @@ import kotlinx.coroutines.launch
 class ChatCommandCoordinator(
     private val scope: CoroutineScope,
     private val backendClient: AIBackendClient,
-    private val deviceCommandRouter: DeviceCommandRouter,
     private val onBotMessage: (String) -> Unit,
 ) {
+    private val sessionHistory = mutableListOf<Map<String, String>>()
+
     fun processUserMessage(userMessage: String) {
         scope.launch {
-            if (deviceCommandRouter.isDeviceCommand(userMessage)) {
-                val success = deviceCommandRouter.executeDirect(userMessage)
-                if (success) {
-                    onBotMessage("✅ Done! Command executed successfully.")
-                } else {
-                    handleDeviceFallback(userMessage)
-                }
-                return@launch
-            }
+            sessionHistory.add(mapOf("role" to "user", "content" to userMessage))
+            if (sessionHistory.size > 20) sessionHistory.removeAt(0)
 
-            backendClient.sendChatMessage(userMessage)
-                .onSuccess { reply -> onBotMessage(reply) }
-                .onFailure { error -> onBotMessage("⚠️ ${error.message}") }
+            val historyToSend = sessionHistory.dropLast(1)
+
+            backendClient.sendChatMessage(userMessage, historyToSend)
+                .onSuccess { reply ->
+                    sessionHistory.add(mapOf("role" to "assistant", "content" to reply))
+                    onBotMessage(reply)
+                }
+                .onFailure { error ->
+                    sessionHistory.removeLastOrNull()
+                    onBotMessage("⚠️ ${error.message}")
+                }
         }
     }
 
-    private suspend fun handleDeviceFallback(command: String) {
-        val screenContext = buildScreenContext()
-        backendClient.sendDeviceCommand(command, screenContext)
-            .onSuccess { reply -> onBotMessage(reply) }
-            .onFailure { error -> onBotMessage("⚠️ ${error.message}") }
-    }
-
-    private fun buildScreenContext(): String {
-        return try {
-            ScreenReaderService.getInstance()?.let { service ->
-                val root = service.rootInActiveWindow
-                val sb = StringBuilder()
-                fun traverse(node: android.view.accessibility.AccessibilityNodeInfo) {
-                    val text = node.text?.toString() ?: node.contentDescription?.toString()
-                    if (!text.isNullOrBlank()) sb.appendLine(text.trim())
-                    for (i in 0 until node.childCount) node.getChild(i)?.let { traverse(it) }
-                }
-                root?.let { traverse(it) }
-                sb.toString().take(1000)
-            } ?: ""
-        } catch (_: Exception) {
-            ""
-        }
+    fun clearHistory() {
+        sessionHistory.clear()
     }
 }
