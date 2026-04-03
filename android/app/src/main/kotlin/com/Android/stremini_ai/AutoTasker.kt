@@ -1,24 +1,7 @@
 package com.Android.stremini_ai
 
 // ============================================================================
-// AutoTasker.kt — Complete voice-controlled phone automation for Stremini AI
-//
-// Architecture:
-//   VoiceEngine       — SpeechRecognizer lifecycle, continuous listen mode
-//   ScreenCapture     — Base64 screenshot via AccessibilityService GLOBAL_ACTION
-//   AutoTaskerBrain   — Orchestrates fast-path → backend → execute loop
-//   AutoTaskerOverlay — Floating UI: status bar + waveform + output panel
-//   AutoTaskerService — Entry point, wires everything together
-//
-// Backend endpoint: POST /voice-command
-//   Body: { command, ui_context, step, history, screenshot, screenshot_mime }
-//   Response: { actions[], is_done, fast_path }
-//
-// Supported actions (mirrors automation.js):
-//   tap, long_press, type, scroll, swipe, open_app,
-//   home, back, recents, notifications, quick_settings,
-//   screenshot, volume, media_key, brightness, clipboard,
-//   wait, request_screen, done, error
+// AutoTasker.kt — Premium voice + text controlled phone automation
 // ============================================================================
 
 import android.Manifest
@@ -33,25 +16,36 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.util.Base64
 import android.util.Log
 import android.view.Gravity
-import android.view.LayoutInflater
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
@@ -64,10 +58,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
-
 private const val TAG              = "AutoTasker"
 private const val BACKEND_URL      = "https://ai-keyboard-backend.vishwajeetadkine705.workers.dev"
 private const val VOICE_COMMAND_EP = "$BACKEND_URL/automation/voice-command"
@@ -76,7 +66,7 @@ private const val NOTIF_CHANNEL_ID = "autotasker_channel"
 private const val NOTIF_ID         = 42
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VoiceEngine — thin SpeechRecognizer wrapper with keep-alive loop
+// VoiceEngine
 // ─────────────────────────────────────────────────────────────────────────────
 
 class VoiceEngine(
@@ -135,7 +125,6 @@ class VoiceEngine(
                         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         ?.firstOrNull()?.trim() ?: ""
                     if (text.isNotBlank()) onFinal(text)
-                    // Don't auto-restart here — let AutoTaskerBrain decide
                 }
 
                 override fun onError(error: Int) {
@@ -154,34 +143,19 @@ class VoiceEngine(
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500L)
     }
 
-    /** Called after a task finishes — resumes listening if still active */
     fun resume() { if (active) createAndStart() }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ScreenCapture — grabs screenshot via MediaProjection OR Accessibility fallback
+// ScreenCapture
 // ─────────────────────────────────────────────────────────────────────────────
 
 object ScreenCapture {
-
-    /**
-     * Take a screenshot using GLOBAL_ACTION_TAKE_SCREENSHOT (API 28+).
-     * Returns base64-encoded JPEG string, or null on failure.
-     *
-     * For Android 9+, AccessibilityService can take screenshots directly.
-     * We use a callback-based approach with a 1-second timeout.
-     */
     fun captureBase64(service: ScreenReaderService): String? {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                // Ask the system to take a screenshot; result comes through
-                // AccessibilityService.onScreenshotResult (API 30+)
-                // For API 28-29 we trigger the global action and capture via
-                // the accessibility node snapshot.
                 service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT)
             }
-            // Fallback: dump the accessibility node tree into a text representation
-            // (real pixel screenshot is handled by TakeScreenshotCallback on API 30+)
             null
         } catch (e: Exception) {
             Log.e(TAG, "Screenshot capture failed: ${e.message}")
@@ -189,7 +163,6 @@ object ScreenCapture {
         }
     }
 
-    /** Encode a Bitmap to JPEG base64 */
     fun bitmapToBase64(bitmap: Bitmap): String {
         val out = ByteArrayOutputStream()
         bitmap.compress(Bitmap.CompressFormat.JPEG, 75, out)
@@ -198,7 +171,7 @@ object ScreenCapture {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AutoTaskerBrain — orchestrates the see-think-act loop
+// AutoTaskerBrain
 // ─────────────────────────────────────────────────────────────────────────────
 
 class AutoTaskerBrain(
@@ -212,13 +185,10 @@ class AutoTaskerBrain(
         readTimeoutSeconds = 45,
     )
 
-    // History of actions for multi-step context
     private val actionHistory = mutableListOf<JSONObject>()
 
     fun cancel() { scope.coroutineContext.cancelChildren() }
     fun destroy() { scope.cancel() }
-
-    // ── Public entry point ────────────────────────────────────────────────────
 
     fun execute(command: String) {
         scope.launch {
@@ -239,8 +209,6 @@ class AutoTaskerBrain(
         }
     }
 
-    // ── Agentic loop ──────────────────────────────────────────────────────────
-
     private suspend fun runAgenticLoop(command: String) {
         var step       = 1
         var lastError: String? = null
@@ -249,13 +217,7 @@ class AutoTaskerBrain(
         while (step <= MAX_STEPS) {
             onStatus("Step $step/$MAX_STEPS — thinking...")
 
-            // Build screen state
-            val uiContext = withContext(Dispatchers.Main) {
-                buildUIContext()
-            }
-
-            // Optional: capture screenshot for vision mode
-            // val screenshot = ScreenCapture.captureBase64(service)
+            val uiContext = withContext(Dispatchers.Main) { buildUIContext() }
 
             val payload = JSONObject().apply {
                 put("command",  command)
@@ -276,12 +238,8 @@ class AutoTaskerBrain(
             val isFast   = response.optBoolean("fast_path", false)
             val isDone   = response.optBoolean("is_done", false)
 
-            if (isFast) {
-                onStatus("⚡ Fast path")
-                outputText += "⚡ Fast path detected\n"
-            }
+            if (isFast) { outputText += "⚡ Fast path\n" }
 
-            // Execute actions
             var taskComplete = false
             lastError        = null
 
@@ -312,13 +270,13 @@ class AutoTaskerBrain(
                             onStatus("❌ Failed")
                             return
                         }
-                        break // retry loop with error context
+                        break
                     }
                     "request_screen" -> {
                         outputText += "\n"
                         onOutput(outputText)
                         delay(600)
-                        break // break inner, let outer loop get fresh screen
+                        break
                     }
                     "wait" -> {
                         val ms = action.optLong("duration_ms", 1000L).coerceIn(100L, 8000L)
@@ -335,7 +293,6 @@ class AutoTaskerBrain(
                         }
                         outputText += if (ok) " ✓\n" else " ✗\n"
                         actionHistory.add(action)
-
                         if (!ok) lastError = "Action '$actionType' failed"
                         delay(actionDelay(actionType))
                     }
@@ -358,23 +315,17 @@ class AutoTaskerBrain(
         onOutput(outputText + "\n⚠ Stopped after $MAX_STEPS steps")
     }
 
-    // ── Backend call ──────────────────────────────────────────────────────────
-
     private suspend fun callBackend(payload: JSONObject): JSONObject? {
         return withContext(Dispatchers.IO) {
             try {
-                val body = payload.toString()
-                    .toRequestBody("application/json".toMediaType())
+                val body = payload.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder()
                     .url(VOICE_COMMAND_EP)
                     .post(body)
                     .addHeader("Content-Type", "application/json")
                     .build()
                 client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        Log.e(TAG, "Backend HTTP ${response.code}")
-                        return@use null
-                    }
+                    if (!response.isSuccessful) { Log.e(TAG, "Backend HTTP ${response.code}"); return@use null }
                     val raw = response.body?.string() ?: return@use null
                     runCatching { JSONObject(raw) }.getOrNull()
                 }
@@ -384,8 +335,6 @@ class AutoTaskerBrain(
             }
         }
     }
-
-    // ── Build UI context from accessibility tree ───────────────────────────────
 
     private fun buildUIContext(): JSONObject {
         val root = service.rootInActiveWindow ?: return JSONObject()
@@ -413,25 +362,19 @@ class AutoTaskerBrain(
         return JSONObject().apply { put("nodes", nodes) }
     }
 
-    // ── Action executor ───────────────────────────────────────────────────────
-
     private fun executeAction(action: JSONObject): Boolean {
         val type = action.optString("action", "").lowercase().trim()
         return when (type) {
-
-            // Navigation
-            "home"          -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
-            "back"          -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
-            "recents"       -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
-            "notifications" -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS)
-            "quick_settings"-> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
-            "power_menu"    -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG)
-            "screenshot"    -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
-                                   service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT)
-                               else false
-
-            // Tap / long-press
-            "tap", "click" -> {
+            "home"           -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+            "back"           -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+            "recents"        -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_RECENTS)
+            "notifications"  -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS)
+            "quick_settings" -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
+            "power_menu"     -> service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_POWER_DIALOG)
+            "screenshot"     -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+                                    service.performGlobalAction(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT)
+                                else false
+            "tap", "click"   -> {
                 val text   = action.optString("target_text", "")
                 val coords = action.optJSONArray("coordinates")
                 when {
@@ -441,30 +384,23 @@ class AutoTaskerBrain(
                     else -> false
                 }
             }
-
-            "long_press" -> {
+            "long_press"     -> {
                 val text = action.optString("target_text", "")
                 if (text.isNotBlank()) longPressByText(text) else false
             }
-
-            // Text input
-            "type", "input" -> {
+            "type", "input"  -> {
                 val text       = action.optString("text", "")
                 val clearFirst = action.optBoolean("clear_first", false)
                 if (clearFirst) clearFocused()
                 typeText(text)
             }
-
-            // Scroll
-            "scroll" -> {
+            "scroll"         -> {
                 val dir    = action.optString("direction", "down").lowercase()
                 val amount = action.optInt("amount", 1).coerceIn(1, 15)
                 repeat(amount) { scrollOnce(dir) }
                 true
             }
-
-            // Swipe
-            "swipe" -> {
+            "swipe"          -> {
                 val from = action.optJSONArray("from")
                 val to   = action.optJSONArray("to")
                 val dur  = action.optLong("duration_ms", 300L)
@@ -473,55 +409,24 @@ class AutoTaskerBrain(
                           to.optDouble(0).toFloat(),   to.optDouble(1).toFloat(), dur)
                 } else false
             }
-
-            // App launch
             "open_app", "launch_app" -> {
                 val name = action.optString("app_name", "")
                 val pkg  = action.optString("package", "")
                 if (pkg.isNotBlank()) launchPackage(pkg) else launchByName(name)
             }
-
-            // Volume
-            "volume" -> {
-                val dir = action.optString("direction", "up").lowercase()
-                adjustVolume(dir)
-            }
-
-            // Media keys
-            "media_key" -> {
-                val key = action.optString("key", "play").lowercase()
-                sendMediaKey(key)
-            }
-
-            // Brightness
-            "brightness" -> {
-                val dir = action.optString("direction", "up").lowercase()
-                adjustBrightness(dir)
-            }
-
-            // Clipboard
-            "clipboard" -> {
-                val op = action.optString("operation", "copy").lowercase()
-                clipboardOp(op)
-            }
-
-            else -> {
-                Log.w(TAG, "Unknown action type: $type")
-                false
-            }
+            "volume"         -> adjustVolume(action.optString("direction", "up").lowercase())
+            "media_key"      -> sendMediaKey(action.optString("key", "play").lowercase())
+            "brightness"     -> adjustBrightness(action.optString("direction", "up").lowercase())
+            "clipboard"      -> clipboardOp(action.optString("operation", "copy").lowercase())
+            else             -> { Log.w(TAG, "Unknown action type: $type"); false }
         }
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Low-level helpers
-    // ─────────────────────────────────────────────────────────────────────────
 
     private fun tapAt(x: Float, y: Float): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         val path = Path().apply { moveTo(x, y) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
-            .build()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 50)).build()
         service.dispatchGesture(gesture, null, null)
         return true
     }
@@ -547,8 +452,7 @@ class AutoTaskerBrain(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         val path = Path().apply { moveTo(bounds.exactCenterX(), bounds.exactCenterY()) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 1000))
-            .build()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 1000)).build()
         service.dispatchGesture(gesture, null, null)
         return true
     }
@@ -568,8 +472,7 @@ class AutoTaskerBrain(
     private fun clearFocused(): Boolean {
         val root = service.rootInActiveWindow ?: return false
         val node = findNode(root) { it.isFocused && it.isEditable }
-            ?: findNode(root) { it.isEditable }
-            ?: return false
+            ?: findNode(root) { it.isEditable } ?: return false
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, "")
         }
@@ -580,9 +483,8 @@ class AutoTaskerBrain(
         val root      = service.rootInActiveWindow ?: return false
         val scrollable = findNode(root) { it.isScrollable } ?: return false
         return when (direction) {
-            "up",   "backward" -> scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
-            "left"             -> scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
-            else               -> scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+            "up", "backward", "left" -> scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+            else                     -> scrollable.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
         }
     }
 
@@ -590,8 +492,7 @@ class AutoTaskerBrain(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         val path = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
-            .build()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs)).build()
         service.dispatchGesture(gesture, null, null)
         return true
     }
@@ -617,14 +518,14 @@ class AutoTaskerBrain(
         val am = service.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         return try {
             when (direction) {
-                "up"    -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
-                "down"  -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
-                "mute"  -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                               am.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_MUTE, 0)
-                           else @Suppress("DEPRECATION") am.ringerMode = AudioManager.RINGER_MODE_SILENT
-                "unmute"-> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-                               am.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_UNMUTE, 0)
-                           else @Suppress("DEPRECATION") am.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                "up"     -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_RAISE, AudioManager.FLAG_SHOW_UI)
+                "down"   -> am.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_LOWER, AudioManager.FLAG_SHOW_UI)
+                "mute"   -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                                am.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_MUTE, 0)
+                            else @Suppress("DEPRECATION") am.ringerMode = AudioManager.RINGER_MODE_SILENT
+                "unmute" -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                                am.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_UNMUTE, 0)
+                            else @Suppress("DEPRECATION") am.ringerMode = AudioManager.RINGER_MODE_NORMAL
             }
             true
         } catch (e: Exception) { false }
@@ -633,13 +534,13 @@ class AutoTaskerBrain(
     private fun sendMediaKey(key: String): Boolean {
         return try {
             val code = when (key) {
-                "play"          -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY
-                "pause"         -> android.view.KeyEvent.KEYCODE_MEDIA_PAUSE
-                "play_pause"    -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
-                "next"          -> android.view.KeyEvent.KEYCODE_MEDIA_NEXT
-                "previous","prev"-> android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
-                "stop"          -> android.view.KeyEvent.KEYCODE_MEDIA_STOP
-                else            -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                "play"            -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY
+                "pause"           -> android.view.KeyEvent.KEYCODE_MEDIA_PAUSE
+                "play_pause"      -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                "next"            -> android.view.KeyEvent.KEYCODE_MEDIA_NEXT
+                "previous","prev" -> android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                "stop"            -> android.view.KeyEvent.KEYCODE_MEDIA_STOP
+                else              -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
             }
             val am = service.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             am.dispatchMediaKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, code))
@@ -651,25 +552,21 @@ class AutoTaskerBrain(
     private fun adjustBrightness(direction: String): Boolean {
         return try {
             val current = android.provider.Settings.System.getInt(
-                service.contentResolver,
-                android.provider.Settings.System.SCREEN_BRIGHTNESS, 128)
-            val newVal  = when (direction) {
+                service.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, 128)
+            val newVal = when (direction) {
                 "up"   -> minOf(255, current + 50)
                 "down" -> maxOf(0,   current - 50)
                 else   -> current
             }
             android.provider.Settings.System.putInt(
-                service.contentResolver,
-                android.provider.Settings.System.SCREEN_BRIGHTNESS, newVal)
+                service.contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS, newVal)
             true
         } catch (e: Exception) { false }
     }
 
     private fun clipboardOp(operation: String): Boolean {
         val root = service.rootInActiveWindow ?: return false
-        val node = findNode(root) { it.isFocused }
-            ?: findNode(root) { it.isEditable }
-            ?: return false
+        val node = findNode(root) { it.isFocused } ?: findNode(root) { it.isEditable } ?: return false
         return when (operation) {
             "copy"       -> node.performAction(AccessibilityNodeInfo.ACTION_COPY)
             "paste"      -> node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
@@ -679,11 +576,7 @@ class AutoTaskerBrain(
         }
     }
 
-    // BFS node finder
-    private fun findNode(
-        root: AccessibilityNodeInfo,
-        predicate: (AccessibilityNodeInfo) -> Boolean
-    ): AccessibilityNodeInfo? {
+    private fun findNode(root: AccessibilityNodeInfo, predicate: (AccessibilityNodeInfo) -> Boolean): AccessibilityNodeInfo? {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
         while (queue.isNotEmpty()) {
@@ -694,7 +587,6 @@ class AutoTaskerBrain(
         return null
     }
 
-    // Per-action delay heuristic (mirrors automation.js)
     private fun actionDelay(type: String): Long = when (type) {
         "open_app", "launch_app" -> 2000L
         "tap", "click"           -> 500L
@@ -705,40 +597,65 @@ class AutoTaskerBrain(
         "home", "back", "recents"-> 600L
         "notifications", "quick_settings" -> 600L
         "screenshot"             -> 1000L
-        "volume", "media_key", "brightness", "clipboard" -> 150L
         else                     -> 350L
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AutoTaskerOverlay — floating UI drawn over all apps
+// AutoTaskerOverlay — Premium dark glass UI (crash-fixed)
 // ─────────────────────────────────────────────────────────────────────────────
 
 class AutoTaskerOverlay(private val context: Context) {
 
-    private val wm: WindowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val wm: WindowManager =
+        context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val imm: InputMethodManager =
+        context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
     private var rootView: View? = null
+    private var params: WindowManager.LayoutParams? = null
 
     // Sub-views
-    private var tvStatus:       TextView?     = null
-    private var tvOutput:       TextView?     = null
-    private var tvPartial:      TextView?     = null
-    private var tvStepBadge:    TextView?     = null
-    private var waveLayout:     LinearLayout? = null
-    private var btnClose:       TextView?     = null
-    private var btnMic:         LinearLayout? = null
-    private var btnStop:        LinearLayout? = null
-    private var btnMicIcon:     TextView?     = null
-    private var divider:        View?         = null
+    private var tvStatus: TextView? = null
+    private var tvOutput: TextView? = null
+    private var tvPartial: TextView? = null
+    private var tvBadge: TextView? = null
+    private var tvDot: View? = null
+    private var waveLayout: LinearLayout? = null
+    private var btnMic: LinearLayout? = null
+    private var btnStop: LinearLayout? = null
+    private var etTextInput: EditText? = null
+    private var inputRow: LinearLayout? = null
+    private var voiceRow: LinearLayout? = null
+    private var tabVoice: TextView? = null
+    private var tabText: TextView? = null
+    private var scrollOutput: ScrollView? = null
 
     private val waveAnimators = mutableListOf<ValueAnimator>()
+    private var isTextMode = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     // Callbacks
     var onCloseTapped: (() -> Unit)? = null
-    var onMicTapped:   (() -> Unit)? = null
-    var onStopTapped:  (() -> Unit)? = null
+    var onMicTapped: (() -> Unit)? = null
+    var onStopTapped: (() -> Unit)? = null
+    var onTextCommand: ((String) -> Unit)? = null
 
-    // ── show / hide ──────────────────────────────────────────────────────────
+    // ── Colors ─────────────────────────────────────────────────────────────
+    private val cBg          = pc("#F2050812")
+    private val cBorder      = pc("#1E3A5F")
+    private val cAccent      = pc("#2563EB")
+    private val cAccentGlow  = pc("#3B82F6")
+    private val cGreen       = pc("#22C55E")
+    private val cRed         = pc("#EF4444")
+    private val cAmber       = pc("#F59E0B")
+    private val cTextMain    = pc("#F1F5F9")
+    private val cTextMuted   = pc("#64748B")
+    private val cTabActive   = pc("#1E3A5F")
+    private val cTabInactive = pc("#0A0F1A")
+    private val cOutputBg    = pc("#060A12")
+    private val cPartial     = pc("#60A5FA")
+
+    // ── Public API ──────────────────────────────────────────────────────────
 
     fun show() {
         if (rootView != null) return
@@ -746,345 +663,512 @@ class AutoTaskerOverlay(private val context: Context) {
     }
 
     fun hide() {
-        rootView?.let { try { wm.removeView(it) } catch (_: Exception) {} }
+        stopWaveAnimation()
+        rootView?.let {
+            try {
+                if (isTextMode) hideKeyboard()
+                wm.removeView(it)
+            } catch (_: Exception) {}
+        }
         rootView = null
-        waveAnimators.forEach { it.cancel() }
-        waveAnimators.clear()
     }
 
-    // ── public setters ───────────────────────────────────────────────────────
-
     fun setStatus(text: String) {
-        rootView?.post {
+        mainHandler.post {
             tvStatus?.text = text
-            val bgColor = when {
-                text.startsWith("✅") -> android.graphics.Color.parseColor("#1A3D2B")
-                text.startsWith("❌") -> android.graphics.Color.parseColor("#3D1A1A")
-                text.startsWith("⚠") -> android.graphics.Color.parseColor("#3D2E1A")
-                text.startsWith("▶") -> android.graphics.Color.parseColor("#0F1F3D")
-                else                  -> android.graphics.Color.parseColor("#111827")
+            val (bg, border) = when {
+                text.startsWith("✅") -> pc("#0F2D1F") to cGreen
+                text.startsWith("❌") -> pc("#2D0F0F") to cRed
+                text.startsWith("⚠")  -> pc("#2D1F0F") to cAmber
+                text.startsWith("▶")  -> pc("#0D1829") to cAccentGlow
+                text.startsWith("🎤") -> pc("#0F2D1F") to cGreen
+                else                  -> pc("#080C14") to cBorder
             }
-            val borderColor = when {
-                text.startsWith("✅") -> android.graphics.Color.parseColor("#22C55E")
-                text.startsWith("❌") -> android.graphics.Color.parseColor("#EF4444")
-                text.startsWith("⚠") -> android.graphics.Color.parseColor("#F59E0B")
-                text.startsWith("▶") -> android.graphics.Color.parseColor("#3B82F6")
-                else                  -> android.graphics.Color.parseColor("#1E3A5F")
-            }
-            tvStatus?.background = roundedBg(bgColor, borderColor, dp(16).toFloat(), dp(1).toFloat())
+            tvStatus?.background = rounded(bg, border, dp(20).toFloat(), dp(1).toFloat())
+            tvDot?.background = pill(
+                when {
+                    text.startsWith("✅") || text.startsWith("🎤") -> cGreen
+                    text.startsWith("❌") -> cRed
+                    text.startsWith("▶") -> cAccentGlow
+                    else -> pc("#334155")
+                }, 0
+            )
         }
     }
 
     fun setOutput(text: String) {
-        rootView?.post { tvOutput?.text = text }
+        mainHandler.post {
+            tvOutput?.text = text
+            mainHandler.postDelayed({ scrollOutput?.fullScroll(View.FOCUS_DOWN) }, 50)
+        }
     }
 
     fun setPartialTranscript(text: String) {
-        rootView?.post { tvPartial?.text = if (text.isBlank()) "" else "\"$text\"" }
+        mainHandler.post {
+            tvPartial?.text = if (text.isBlank()) "" else "\"$text\""
+        }
     }
 
     fun setStepBadge(text: String) {
-        rootView?.post {
-            tvStepBadge?.text = text
-            tvStepBadge?.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
+        mainHandler.post {
+            tvBadge?.text = text
+            tvBadge?.visibility = if (text.isBlank()) View.GONE else View.VISIBLE
         }
     }
 
     fun setMicState(listening: Boolean) {
-        rootView?.post {
-            val activeColor = android.graphics.Color.parseColor("#22C55E")
-            val inactiveColor = android.graphics.Color.parseColor("#374151")
-            val iconColor = android.graphics.Color.WHITE
-
-            btnMicIcon?.setTextColor(iconColor)
-            btnMic?.background = roundedBg(
-                if (listening) activeColor else inactiveColor,
-                0, dp(20).toFloat(), 0f
+        mainHandler.post {
+            btnMic?.background = pill(
+                if (listening) cGreen else pc("#0F1E35"),
+                if (listening) 0 else cAccentGlow
             )
             if (listening) startWaveAnimation() else stopWaveAnimation()
         }
     }
 
     fun setStopEnabled(enabled: Boolean) {
-        rootView?.post {
+        mainHandler.post {
             btnStop?.isEnabled = enabled
-            btnStop?.alpha = if (enabled) 1f else 0.4f
+            btnStop?.alpha = if (enabled) 1f else 0.32f
         }
     }
 
-    // ── buildView ─────────────────────────────────────────────────────────────
+    // ── Build ───────────────────────────────────────────────────────────────
 
     private fun buildView() {
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
+        val lp = WindowManager.LayoutParams(
+            dp(344), WindowManager.LayoutParams.WRAP_CONTENT,
+            type,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            y = dp(72)
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
+        params = lp
+
+        val root = buildRootLayout()
+        rootView = root
+        wm.addView(root, lp)
+        applyTabState()
+    }
+
+    private fun buildRootLayout(): LinearLayout {
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, 0)
-            background = roundedBg(
-                android.graphics.Color.parseColor("#F20A0F17"),
-                android.graphics.Color.parseColor("#1E3A5F"),
-                dp(20).toFloat(), dp(1).toFloat()
-            )
+            background = rounded(cBg, cBorder, dp(22).toFloat(), dp(1).toFloat())
             elevation = 24f
         }
+        root.addView(buildHeaderBar())
+        root.addView(divider(cBorder))
+        root.addView(buildStatusRow())
+        root.addView(buildPartialRow())
+        root.addView(buildOutputArea())
+        root.addView(buildWaveContainer())
+        root.addView(buildInputSection())
+        return root
+    }
 
-        val header = LinearLayout(context).apply {
+    private fun buildHeaderBar(): LinearLayout {
+        return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL
-            setPadding(dp(16), dp(14), dp(12), dp(14))
-            background = roundedBg(
-                android.graphics.Color.parseColor("#CC111827"),
-                0, dp(0).toFloat(), 0f
-            )
-        }
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), dp(14), dp(14), dp(14))
+            background = rounded(pc("#CC0D1117"), 0, 0f, 0f)
 
-        val dot = View(context).apply {
-            background = roundedBg(
-                android.graphics.Color.parseColor("#22C55E"),
-                0, dp(5).toFloat(), 0f
-            )
-            layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).also {
-                it.marginEnd = dp(8)
+            // Animated status dot
+            val dot = View(context).apply {
+                background = pill(cGreen, 0)
+                layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).also { it.marginEnd = dp(10) }
             }
-        }
-        header.addView(dot)
+            tvDot = dot
+            addView(dot)
 
-        val title = TextView(context).apply {
-            text = "Auto Tasker"
-            setTextColor(android.graphics.Color.WHITE)
-            textSize = 14f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        header.addView(title)
+            // Title
+            addView(TextView(context).apply {
+                text = "Auto Tasker"
+                setTextColor(cTextMain)
+                textSize = 15f
+                typeface = Typeface.DEFAULT_BOLD
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
 
-        val badge = TextView(context).apply {
-            text = ""
-            setTextColor(android.graphics.Color.parseColor("#93C5FD"))
-            textSize = 11f
-            visibility = View.GONE
-            background = roundedBg(
-                android.graphics.Color.parseColor("#1E3A5F"),
-                android.graphics.Color.parseColor("#3B82F6"),
-                dp(8).toFloat(), dp(1).toFloat()
-            )
-            setPadding(dp(6), dp(2), dp(6), dp(2))
+            // Step badge
+            val badge = TextView(context).apply {
+                text = ""
+                setTextColor(pc("#93C5FD"))
+                textSize = 10f
+                typeface = Typeface.DEFAULT_BOLD
+                visibility = View.GONE
+                background = rounded(pc("#0D1829"), pc("#2563EB"), dp(8).toFloat(), dp(1).toFloat())
+                setPadding(dp(8), dp(3), dp(8), dp(3))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).also { it.marginEnd = dp(10) }
+            }
+            tvBadge = badge
+            addView(badge)
+
+            // Close button
+            addView(TextView(context).apply {
+                text = "✕"
+                setTextColor(pc("#475569"))
+                textSize = 14f
+                gravity = Gravity.CENTER
+                setPadding(dp(6), dp(2), dp(4), dp(2))
+                setOnClickListener { onCloseTapped?.invoke() }
+                layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            })
+        }
+    }
+
+    private fun buildStatusRow(): LinearLayout {
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(12), dp(8), dp(12), dp(4))
+            gravity = Gravity.CENTER_VERTICAL
+
+            val pill = TextView(context).apply {
+                text = "Ready — speak or type a command"
+                setTextColor(cTextMuted)
+                textSize = 11.5f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                background = rounded(pc("#080C14"), cBorder, dp(20).toFloat(), dp(1).toFloat())
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+            }
+            tvStatus = pill
+            addView(pill)
+        }
+    }
+
+    private fun buildPartialRow(): LinearLayout {
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(16), dp(3), dp(16), dp(2))
+
+            val t = TextView(context).apply {
+                text = ""
+                setTextColor(cPartial)
+                textSize = 11.5f
+                typeface = Typeface.create(Typeface.DEFAULT, Typeface.ITALIC)
+            }
+            tvPartial = t
+            addView(t)
+        }
+    }
+
+    private fun buildOutputArea(): ScrollView {
+        val scroll = ScrollView(context).apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.marginEnd = dp(8) }
-        }
-        tvStepBadge = badge
-        header.addView(badge)
-
-        val close = TextView(context).apply {
-            text = "✕"
-            setTextColor(android.graphics.Color.parseColor("#6B7280"))
-            textSize = 16f
-            gravity = android.view.Gravity.CENTER
-            setPadding(dp(4), 0, dp(4), 0)
-            setOnClickListener { onCloseTapped?.invoke() }
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-        }
-        btnClose = close
-        header.addView(close)
-        root.addView(header)
-
-        val body = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(10), dp(14), dp(14))
-        }
-
-        val partial = TextView(context).apply {
-            text = ""
-            setTextColor(android.graphics.Color.parseColor("#60A5FA"))
-            textSize = 12f
-            typeface = android.graphics.Typeface.create(
-                android.graphics.Typeface.DEFAULT, android.graphics.Typeface.ITALIC
-            )
-            setPadding(0, 0, 0, dp(6))
-        }
-        tvPartial = partial
-        body.addView(partial)
-
-        val status = TextView(context).apply {
-            text = "Ready — tap mic to speak"
-            setTextColor(android.graphics.Color.parseColor("#E5E7EB"))
-            textSize = 12f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-            setPadding(dp(10), dp(5), dp(10), dp(5))
-            background = roundedBg(
-                android.graphics.Color.parseColor("#111827"),
-                android.graphics.Color.parseColor("#1E3A5F"),
-                dp(16).toFloat(), dp(1).toFloat()
-            )
-        }
-        tvStatus = status
-        body.addView(status)
-
-        divider = View(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(8)
-            )
-        }
-        body.addView(divider)
-
-        val scrollBg = roundedBg(
-            android.graphics.Color.parseColor("#0D111827"),
-            android.graphics.Color.parseColor("#1F2937"),
-            dp(10).toFloat(), dp(1).toFloat()
-        )
-        val scroll = android.widget.ScrollView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(140)
-            )
-            background = scrollBg
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(110)
+            ).also { it.setMargins(dp(12), dp(6), dp(12), dp(4)) }
+            background = rounded(cOutputBg, pc("#1E293B"), dp(12).toFloat(), dp(1).toFloat())
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
         }
-        val output = TextView(context).apply {
+        scrollOutput = scroll
+
+        val tv = TextView(context).apply {
             text = ""
-            setTextColor(android.graphics.Color.parseColor("#D1D5DB"))
+            setTextColor(pc("#94A3B8"))
             textSize = 11.5f
             setLineSpacing(dp(2).toFloat(), 1f)
-            typeface = android.graphics.Typeface.MONOSPACE
+            typeface = Typeface.MONOSPACE
         }
-        tvOutput = output
-        scroll.addView(output)
-        body.addView(scroll)
+        tvOutput = tv
+        scroll.addView(tv)
+        return scroll
+    }
 
-        body.addView(View(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(10)
-            )
-        })
-
+    private fun buildWaveContainer(): LinearLayout {
         val wave = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER_VERTICAL or android.view.Gravity.CENTER_HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.CENTER_HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, dp(24)
-            ).also { it.bottomMargin = dp(10) }
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(28)
+            ).also { it.setMargins(0, dp(8), 0, dp(4)) }
         }
         waveLayout = wave
         buildWaveBars(wave)
-        body.addView(wave)
+        return wave
+    }
 
-        val btnRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
+    private fun buildInputSection(): LinearLayout {
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(6), dp(12), dp(14))
+
+            // Mode tabs
+            val tabs = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                background = rounded(pc("#080C14"), cBorder, dp(14).toFloat(), dp(1).toFloat())
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, dp(40)
+                ).also { it.bottomMargin = dp(10) }
+                setPadding(dp(3), dp(3), dp(3), dp(3))
+            }
+
+            val tVoice = buildTabLabel("🎙  Voice", active = true) { switchToVoiceMode() }
+            tabVoice = tVoice
+            tabs.addView(tVoice)
+
+            val tText = buildTabLabel("⌨  Text", active = false) { switchToTextMode() }
+            tabText = tText
+            tabs.addView(tText)
+
+            addView(tabs)
+            addView(buildVoiceControlRow())
+            addView(buildTextInputRow())
         }
+    }
 
-        val stopBtn = LinearLayout(context).apply {
+    private fun buildTabLabel(label: String, active: Boolean, onClick: () -> Unit): TextView {
+        return TextView(context).apply {
+            text = label
+            setTextColor(if (active) cTextMain else cTextMuted)
+            textSize = 12.5f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
+            background = if (active)
+                rounded(cTabActive, cAccentGlow, dp(11).toFloat(), dp(1).toFloat())
+            else
+                rounded(cTabInactive, 0, dp(11).toFloat(), 0f)
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun buildVoiceControlRow(): LinearLayout {
+        val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER
+            gravity = Gravity.CENTER
+        }
+        voiceRow = row
+
+        // Stop button
+        val stop = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
             setPadding(dp(16), dp(10), dp(16), dp(10))
-            background = roundedBg(
-                android.graphics.Color.parseColor("#3D1A1A"),
-                android.graphics.Color.parseColor("#EF4444"),
-                dp(20).toFloat(), dp(1).toFloat()
-            )
+            background = rounded(pc("#1F0A0A"), cRed, dp(20).toFloat(), dp(1).toFloat())
             isEnabled = false
-            alpha = 0.4f
+            alpha = 0.32f
             setOnClickListener { onStopTapped?.invoke() }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).also { it.marginEnd = dp(12) }
+            ).also { it.marginEnd = dp(10) }
         }
-        val stopIcon = TextView(context).apply {
+        stop.addView(TextView(context).apply {
             text = "⏹"
-            setTextColor(android.graphics.Color.parseColor("#EF4444"))
-            textSize = 14f
-            setPadding(0, 0, dp(6), 0)
-        }
-        val stopLabel = TextView(context).apply {
+            setTextColor(cRed)
+            textSize = 12f
+            setPadding(0, 0, dp(5), 0)
+        })
+        stop.addView(TextView(context).apply {
             text = "Stop"
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(cTextMain)
             textSize = 13f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        stopBtn.addView(stopIcon)
-        stopBtn.addView(stopLabel)
-        btnStop = stopBtn
-        btnRow.addView(stopBtn)
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        btnStop = stop
+        row.addView(stop)
 
-        val micBtn = LinearLayout(context).apply {
+        // Mic button
+        val mic = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = android.view.Gravity.CENTER
-            setPadding(dp(16), dp(10), dp(16), dp(10))
-            background = roundedBg(
-                android.graphics.Color.parseColor("#374151"),
-                0, dp(20).toFloat(), 0f
-            )
+            gravity = Gravity.CENTER
+            setPadding(dp(20), dp(10), dp(20), dp(10))
+            background = pill(pc("#0F1E35"), cAccentGlow)
             setOnClickListener { onMicTapped?.invoke() }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
-        val micIcon = TextView(context).apply {
+        mic.addView(TextView(context).apply {
             text = "🎙"
-            textSize = 15f
-            setPadding(0, 0, dp(6), 0)
-        }
-        btnMicIcon = micIcon
-        val micLabel = TextView(context).apply {
+            textSize = 14f
+            setPadding(0, 0, dp(7), 0)
+        })
+        mic.addView(TextView(context).apply {
             text = "Speak"
-            setTextColor(android.graphics.Color.WHITE)
+            setTextColor(cTextMain)
             textSize = 13f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        }
-        micBtn.addView(micIcon)
-        micBtn.addView(micLabel)
-        btnMic = micBtn
-        btnRow.addView(micBtn)
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        btnMic = mic
+        row.addView(mic)
 
-        body.addView(btnRow)
-        root.addView(body)
-
-        rootView = root
-
-        val params = WindowManager.LayoutParams(
-            dp(320), WindowManager.LayoutParams.WRAP_CONTENT,
-            type,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
-            y = dp(80)
-        }
-
-        wm.addView(root, params)
+        return row
     }
 
-    // ── wave bars ─────────────────────────────────────────────────────────────
+    // ── CRASH FIX: EditText in overlay window ───────────────────────────────
+    // 1. FLAG_NOT_FOCUSABLE is cleared BEFORE requestFocus(), with a 120ms delay
+    //    so WindowManager propagates the flag change before the IME attaches.
+    // 2. IME_FLAG_NO_EXTRACT_UI prevents full-screen IME on small overlay windows.
+    // 3. On switch back to voice mode, keyboard is hidden BEFORE re-adding the flag.
+    private fun buildTextInputRow(): LinearLayout {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        inputRow = row
+
+        val et = EditText(context).apply {
+            hint = "Type your command…"
+            setHintTextColor(pc("#334155"))
+            setTextColor(cTextMain)
+            textSize = 13f
+            background = rounded(pc("#060A12"), pc("#1E293B"), dp(18).toFloat(), dp(1).toFloat())
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            maxLines = 2
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                        android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            isFocusable = true
+            isFocusableInTouchMode = true
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                .also { it.marginEnd = dp(8) }
+
+            setOnEditorActionListener { _, actionId, event ->
+                if (actionId == EditorInfo.IME_ACTION_SEND ||
+                    (event?.keyCode == KeyEvent.KEYCODE_ENTER &&
+                     event.action == KeyEvent.ACTION_DOWN)) {
+                    val cmd = text?.toString()?.trim().orEmpty()
+                    if (cmd.isNotBlank()) {
+                        onTextCommand?.invoke(cmd)
+                        setText("")
+                    }
+                    true
+                } else false
+            }
+        }
+        etTextInput = et
+        row.addView(et)
+
+        // Send button
+        val send = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = pill(cAccent, 0)
+            setOnClickListener {
+                val cmd = et.text?.toString()?.trim().orEmpty()
+                if (cmd.isNotBlank()) {
+                    onTextCommand?.invoke(cmd)
+                    et.setText("")
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+        }
+        send.addView(TextView(context).apply {
+            text = "▶"
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+        })
+        row.addView(send)
+
+        return row
+    }
+
+    // ── Mode switching ──────────────────────────────────────────────────────
+
+    private fun switchToVoiceMode() {
+        if (!isTextMode) return
+        isTextMode = false
+        // Hide keyboard FIRST, then restore NOT_FOCUSABLE flag
+        hideKeyboard()
+        mainHandler.postDelayed({ setWindowFocusable(false) }, 80)
+        applyTabState()
+    }
+
+    private fun switchToTextMode() {
+        if (isTextMode) return
+        isTextMode = true
+        applyTabState()
+        // Update window flags first, then request focus after delay
+        setWindowFocusable(true)
+        mainHandler.postDelayed({
+            etTextInput?.requestFocus()
+            etTextInput?.let { imm.showSoftInput(it, InputMethodManager.SHOW_IMPLICIT) }
+        }, 120)
+    }
+
+    private fun setWindowFocusable(focusable: Boolean) {
+        val root = rootView ?: return
+        val lp = params ?: return
+        try {
+            if (focusable) {
+                lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            } else {
+                lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            }
+            wm.updateViewLayout(root, lp)
+        } catch (_: Exception) {}
+    }
+
+    private fun hideKeyboard() {
+        etTextInput?.let {
+            it.clearFocus()
+            imm.hideSoftInputFromWindow(it.windowToken, 0)
+        }
+    }
+
+    private fun applyTabState() {
+        mainHandler.post {
+            tabVoice?.apply {
+                background = if (!isTextMode)
+                    rounded(cTabActive, cAccentGlow, dp(11).toFloat(), dp(1).toFloat())
+                else
+                    rounded(cTabInactive, 0, dp(11).toFloat(), 0f)
+                setTextColor(if (!isTextMode) cTextMain else cTextMuted)
+            }
+            tabText?.apply {
+                background = if (isTextMode)
+                    rounded(cTabActive, cAccentGlow, dp(11).toFloat(), dp(1).toFloat())
+                else
+                    rounded(cTabInactive, 0, dp(11).toFloat(), 0f)
+                setTextColor(if (isTextMode) cTextMain else cTextMuted)
+            }
+            inputRow?.visibility  = if (isTextMode) View.VISIBLE else View.GONE
+            waveLayout?.visibility = if (!isTextMode) View.VISIBLE else View.GONE
+            voiceRow?.visibility  = if (!isTextMode) View.VISIBLE else View.GONE
+        }
+    }
+
+    // ── Wave animation ──────────────────────────────────────────────────────
 
     private fun buildWaveBars(container: LinearLayout) {
         val colors = listOf(
-            "#3B82F6", "#60A5FA", "#93C5FD", "#60A5FA", "#3B82F6",
-            "#2563EB", "#3B82F6", "#60A5FA", "#93C5FD", "#60A5FA",
-            "#3B82F6", "#2563EB"
+            "#1D4ED8","#2563EB","#3B82F6","#60A5FA","#93C5FD",
+            "#60A5FA","#3B82F6","#2563EB","#1D4ED8","#2563EB",
+            "#3B82F6","#60A5FA","#93C5FD","#60A5FA"
         )
         colors.forEach { color ->
-            val bar = View(context).apply {
-                background = roundedBg(
-                    android.graphics.Color.parseColor(color),
-                    0, dp(3).toFloat(), 0f
-                )
-                layoutParams = LinearLayout.LayoutParams(dp(3), dp(6)).also {
-                    it.marginStart = dp(2)
-                    it.marginEnd = dp(2)
-                }
-            }
-            container.addView(bar)
+            container.addView(View(context).apply {
+                background = pill(pc(color), 0)
+                layoutParams = LinearLayout.LayoutParams(dp(3), dp(6))
+                    .also { it.marginStart = dp(2); it.marginEnd = dp(2) }
+            })
         }
     }
 
@@ -1094,20 +1178,20 @@ class AutoTaskerOverlay(private val context: Context) {
         for (i in 0 until bars.childCount) {
             val bar = bars.getChildAt(i)
             val minH = dp(4).toFloat()
-            val maxH = dp(18 + (i % 4) * 4).toFloat()
-            val animator = ValueAnimator.ofFloat(minH, maxH, minH).apply {
-                duration = (350L + i * 70L)
+            val maxH = dp(12 + (i % 5) * 6).toFloat()
+            ValueAnimator.ofFloat(minH, maxH, minH).apply {
+                duration = 280L + i * 55L
                 repeatCount = ValueAnimator.INFINITE
-                repeatMode = ValueAnimator.REVERSE
-                startDelay = (i * 55L)
+                repeatMode  = ValueAnimator.REVERSE
+                startDelay  = i * 40L
                 addUpdateListener { anim ->
                     val h = (anim.animatedValue as Float).toInt()
                     (bar.layoutParams as LinearLayout.LayoutParams).height = h
                     bar.requestLayout()
                 }
                 start()
+                waveAnimators.add(this)
             }
-            waveAnimators.add(animator)
         }
     }
 
@@ -1122,46 +1206,37 @@ class AutoTaskerOverlay(private val context: Context) {
         }
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+    // ── Drawing helpers ─────────────────────────────────────────────────────
 
-    private fun roundedBg(
-        fillColor: Int,
-        strokeColor: Int,
-        cornerRadius: Float,
-        strokeWidth: Float
-    ): android.graphics.drawable.GradientDrawable {
-        return android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
-            setColor(fillColor)
-            this.cornerRadius = cornerRadius
-            if (strokeColor != 0) setStroke(strokeWidth.toInt(), strokeColor)
+    private fun rounded(fill: Int, stroke: Int, radius: Float, strokeW: Float): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fill)
+            cornerRadius = radius
+            if (stroke != 0) setStroke(strokeW.toInt(), stroke)
         }
+
+    private fun pill(fill: Int, stroke: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fill)
+            cornerRadius = dp(50).toFloat()
+            if (stroke != 0) setStroke(dp(1), stroke)
+        }
+
+    private fun divider(color: Int): View = View(context).apply {
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1))
+        setBackgroundColor(color)
     }
 
-    private fun dp(value: Int): Int =
-        (value * context.resources.displayMetrics.density).toInt()
+    private fun pc(hex: String): Int = Color.parseColor(hex)
+    private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AutoTaskerService — foreground service, entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * AutoTaskerService ties VoiceEngine + AutoTaskerBrain + AutoTaskerOverlay together.
- *
- * Start it from ChatOverlayService or MainActivity:
- *
- *   val intent = Intent(context, AutoTaskerService::class.java)
- *   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
- *       context.startForegroundService(intent)
- *   else context.startService(intent)
- *
- * Stop it:
- *   context.stopService(Intent(context, AutoTaskerService::class.java))
- *
- * Toggle mic from notification:
- *   Intent(AutoTaskerService.ACTION_TOGGLE_MIC)
- */
 class AutoTaskerService : Service() {
 
     companion object {
@@ -1174,9 +1249,8 @@ class AutoTaskerService : Service() {
     private var voice:   VoiceEngine? = null
     private var brain:   AutoTaskerBrain? = null
 
-    // State
-    private var isExecuting = false
-    private var continuousMode = true  // keep listening after task done
+    private var isExecuting     = false
+    private var continuousMode  = true
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -1202,29 +1276,28 @@ class AutoTaskerService : Service() {
         serviceScope.cancel()
     }
 
-    // ── Build ─────────────────────────────────────────────────────────────────
+    // ── Build ─────────────────────────────────────────────────────────────
 
     private fun buildComponents() {
-        // Overlay
         overlay = AutoTaskerOverlay(this).apply {
             show()
-            onCloseTapped = { stopSelf() }
-            onMicTapped   = { toggleMic() }
-            onStopTapped  = {
+            onCloseTapped  = { stopSelf() }
+            onMicTapped    = { toggleMic() }
+            onStopTapped   = {
                 brain?.cancel()
                 isExecuting = false
                 overlay?.setStatus("⏹ Stopped")
                 overlay?.setMicState(false)
                 overlay?.setStopEnabled(false)
                 overlay?.setStepBadge("")
-                if (continuousMode) { delay100thenResume() }
+                if (continuousMode) delayThenResume()
             }
+            onTextCommand  = { cmd -> handleCommand(cmd) }
             setMicState(false)
-            setStatus("Ready — tap mic to speak")
+            setStatus("Ready — choose voice or text")
             setStopEnabled(false)
         }
 
-        // Brain
         val service = ScreenReaderService.getInstance()
         if (service == null) {
             overlay?.setStatus("⚠ Enable Accessibility first")
@@ -1232,26 +1305,21 @@ class AutoTaskerService : Service() {
         }
 
         brain = AutoTaskerBrain(
-            service   = service,
-            onStatus  = { msg ->
+            service  = service,
+            onStatus = { msg ->
                 overlay?.setStatus(msg)
                 updateNotification(msg)
                 val stepMatch = Regex("Step (\\d+)/(\\d+)").find(msg)
                 if (stepMatch != null) {
-                    overlay?.setStepBadge("${stepMatch.groupValues[1]} / ${stepMatch.groupValues[2]}")
-                } else if (
-                    msg.startsWith("✅") ||
-                    msg.startsWith("❌") ||
-                    msg.startsWith("⏹") ||
-                    msg.startsWith("⚠")
-                ) {
+                    overlay?.setStepBadge("${stepMatch.groupValues[1]}/${stepMatch.groupValues[2]}")
+                } else if (msg.startsWith("✅") || msg.startsWith("❌") ||
+                           msg.startsWith("⏹") || msg.startsWith("⚠")) {
                     overlay?.setStepBadge("")
                 }
             },
-            onOutput  = { text -> overlay?.setOutput(text) }
+            onOutput = { text -> overlay?.setOutput(text) }
         )
 
-        // Voice engine — starts listening immediately
         buildVoiceEngine()
         startListening()
     }
@@ -1259,16 +1327,11 @@ class AutoTaskerService : Service() {
     private fun buildVoiceEngine() {
         voice = VoiceEngine(
             context   = this,
-            onPartial = { partial ->
-                overlay?.setPartialTranscript(partial)
-            },
-            onFinal   = { command ->
-                handleCommand(command)
-            },
+            onPartial = { partial -> overlay?.setPartialTranscript(partial) },
+            onFinal   = { command -> handleCommand(command) },
             onError   = { code ->
                 val msg = voiceErrorMessage(code)
                 overlay?.setStatus(msg)
-                // Auto-retry listening after transient errors
                 if (code != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS &&
                     code != SpeechRecognizer.ERROR_RECOGNIZER_BUSY) {
                     serviceScope.launch {
@@ -1279,7 +1342,7 @@ class AutoTaskerService : Service() {
             },
             onReady   = {
                 if (!isExecuting) {
-                    overlay?.setStatus("🎤 Listening...")
+                    overlay?.setStatus("🎤 Listening…")
                     overlay?.setMicState(true)
                 }
             }
@@ -1305,15 +1368,11 @@ class AutoTaskerService : Service() {
         }
     }
 
-    // ── Command handling ──────────────────────────────────────────────────────
+    // ── Command handling ──────────────────────────────────────────────────
 
     private fun handleCommand(command: String) {
-        if (command.isBlank()) {
-            voice?.resume()
-            return
-        }
+        if (command.isBlank()) { voice?.resume(); return }
 
-        // Intercept meta-commands
         val lower = command.lowercase().trim()
         if (lower == "stop" || lower == "cancel" || lower == "stop tasker") {
             brain?.cancel()
@@ -1322,14 +1381,13 @@ class AutoTaskerService : Service() {
             overlay?.setMicState(false)
             overlay?.setStopEnabled(false)
             overlay?.setStepBadge("")
-            if (continuousMode) { delay100thenResume() }
+            if (continuousMode) delayThenResume()
             return
         }
         if (lower == "quit" || lower == "exit" || lower == "close autotasker") {
             stopSelf(); return
         }
 
-        // Stop listening while executing
         voice?.stop()
         overlay?.setPartialTranscript("")
         overlay?.setMicState(false)
@@ -1343,41 +1401,36 @@ class AutoTaskerService : Service() {
             overlay?.setStepBadge("")
             if (continuousMode) {
                 delay(1200)
-                overlay?.setStatus("🎤 Listening...")
+                overlay?.setStatus("🎤 Listening…")
                 overlay?.setMicState(true)
                 voice?.resume()
             } else {
-                overlay?.setStatus("Task complete — tap mic to continue")
-                overlay?.setMicState(false)
+                overlay?.setStatus("Done — tap mic or type to continue")
             }
         }
     }
 
-    private fun delay100thenResume() {
+    private fun delayThenResume() {
         serviceScope.launch {
             delay(1000)
-            overlay?.setStatus("🎤 Listening...")
+            overlay?.setStatus("🎤 Listening…")
             overlay?.setMicState(true)
             voice?.resume()
         }
     }
 
-    // ── Foreground notification ───────────────────────────────────────────────
+    // ── Notification ──────────────────────────────────────────────────────
 
     private fun startForeground() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(
-                NOTIF_CHANNEL_ID, "Auto Tasker",
-                NotificationManager.IMPORTANCE_LOW
-            )
+            val ch = NotificationChannel(NOTIF_CHANNEL_ID, "Auto Tasker", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
         startForeground(NOTIF_ID, buildNotification("Ready"))
     }
 
     private fun updateNotification(status: String) {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIF_ID, buildNotification(status))
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, buildNotification(status))
     }
 
     private fun buildNotification(status: String): android.app.Notification {
@@ -1403,45 +1456,30 @@ class AutoTaskerService : Service() {
             .build()
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
     private fun voiceErrorMessage(code: Int): String = when (code) {
-        SpeechRecognizer.ERROR_AUDIO                  -> "🔇 Audio error — retrying"
-        SpeechRecognizer.ERROR_CLIENT                 -> "⚠ Client error — retrying"
-        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "⚠ Microphone permission denied"
-        SpeechRecognizer.ERROR_NETWORK                -> "📡 Network error — retrying"
-        SpeechRecognizer.ERROR_NETWORK_TIMEOUT        -> "📡 Network timeout — retrying"
-        SpeechRecognizer.ERROR_NO_MATCH               -> "🤷 No speech detected"
-        SpeechRecognizer.ERROR_RECOGNIZER_BUSY        -> "⏳ Recognizer busy"
-        SpeechRecognizer.ERROR_SERVER                 -> "🌐 Server error — retrying"
-        SpeechRecognizer.ERROR_SPEECH_TIMEOUT         -> "⏱ Silence timeout"
-        else                                          -> "⚠ Voice error ($code)"
+        SpeechRecognizer.ERROR_AUDIO                    -> "🔇 Audio error"
+        SpeechRecognizer.ERROR_CLIENT                   -> "⚠ Client error"
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "⚠ Mic permission denied"
+        SpeechRecognizer.ERROR_NETWORK                  -> "📡 Network error"
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT          -> "📡 Network timeout"
+        SpeechRecognizer.ERROR_NO_MATCH                 -> "🤷 No speech detected"
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY          -> "⏳ Recognizer busy"
+        SpeechRecognizer.ERROR_SERVER                   -> "🌐 Server error"
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT           -> "⏱ Silence timeout"
+        else                                            -> "⚠ Voice error ($code)"
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AutoTaskerManager — thin wrapper used by ChatOverlayService
+// AutoTaskerManager
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Drop this into ChatOverlayService in place of the old handleAutoTasker() method.
- *
- * Usage:
- *   private val autoTasker = AutoTaskerManager(this)
- *
- *   // In handleAutoTasker():
- *   autoTasker.toggle(menuItems[0].id, activeFeatures)
- */
 class AutoTaskerManager(private val context: Context) {
 
     private var running = false
 
     fun toggle(featureId: Int, activeFeatures: MutableSet<Int>) {
-        if (running) {
-            stop(featureId, activeFeatures)
-        } else {
-            start(featureId, activeFeatures)
-        }
+        if (running) stop(featureId, activeFeatures) else start(featureId, activeFeatures)
     }
 
     fun start(featureId: Int, activeFeatures: MutableSet<Int>) {
@@ -1467,4 +1505,4 @@ class AutoTaskerManager(private val context: Context) {
     }
 
     fun isRunning() = running
-}
+} 
