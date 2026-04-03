@@ -41,7 +41,10 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data is Map) {
-          return data['response'] ?? data['reply'] ?? data['message'] ?? "Empty reply.";
+          return data['response'] ??
+              data['reply'] ??
+              data['message'] ??
+              "Empty reply.";
         }
         return data.toString();
       } else {
@@ -98,7 +101,8 @@ class ApiService {
     List<Map<String, dynamic>>? history,
   }) async* {
     try {
-      final request = http.Request('POST', Uri.parse("$baseUrl/chat/stream"));
+      final request =
+          http.Request('POST', Uri.parse("$baseUrl/chat/stream"));
       request.headers.addAll({
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -109,7 +113,8 @@ class ApiService {
       });
       final streamedResponse = await request.send();
       if (streamedResponse.statusCode == 200) {
-        await for (final chunk in streamedResponse.stream.transform(utf8.decoder)) {
+        await for (final chunk
+            in streamedResponse.stream.transform(utf8.decoder)) {
           for (final line in chunk.split('\n')) {
             if (line.startsWith('data: ')) {
               final jsonStr = line.substring(6);
@@ -132,35 +137,93 @@ class ApiService {
     }
   }
 
-  // ── GitHub Agent ──────────────────────────────────────────────────────────
-  // FIX 1: maxClientIterations raised from 5 → 20.
-  //        Complex repos need 8-15 file reads before the AI can produce a fix.
-  //        The old cap of 5 made the client bail out with a fake "infinite loop"
-  //        error before the Worker ever finished its job.
+  // ── GitHub Agent — single step (called per iteration by the screen) ───────
   //
-  // FIX 2: History construction no longer triggers the Worker's duplicate-
-  //        response guard. The Worker (index.js lines 74-85) checks if the last
-  //        two assistant messages in history are identical. The old code always
-  //        wrote '<read_file path="$nextFile" />' as the assistant message,
-  //        which after trimHistory() could leave two identical assistant entries
-  //        and cause the Worker to abort with "AI is producing identical
-  //        responses". The fix: keep history exactly as the HTML frontend does —
-  //        assistant = the AI's actual <read_file/> tag (unique per file),
-  //        user = the file content injected as context.
+  // The agent screen drives the loop itself (stremini_agent_screen.dart).
+  // Each call sends the current history + visitedFiles + iteration counter
+  // and returns the raw decoded response map from the Worker.
+  //
+  // Worker status values:
+  //   "CONTINUE"   → action "read_file" or "more_files" or "already_read"
+  //   "FIXED"      → terminal — fixedContent / filePath present
+  //   "COMPLETED"  → terminal — solution present
+  //   "ERROR"      → terminal — message present
+  //
+  Future<Map<String, dynamic>> githubAgentStep({
+    required String repoOwner,
+    required String repoName,
+    required String task,
+    required List<Map<String, dynamic>> history,
+    required List<String> visitedFiles,
+    required int iteration,
+    List<Map<String, dynamic>> outputFiles = const [],
+    String agentMode = "fix",
+    bool allowPush = false,
+  }) async {
+    try {
+      final response = await http.post(
+        Uri.parse(githubAgentUrl),
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+        },
+        body: jsonEncode({
+          "repoOwner": repoOwner,
+          "repoName": repoName,
+          "task": task,
+          "history": history,
+          "readFiles": visitedFiles,
+          "outputFiles": outputFiles,   // ← pass accumulated output files back
+          "iteration": iteration,
+          "agentMode": agentMode,
+          "allowPush": allowPush,
+        }),
+      );
+
+      if (response.statusCode != 200) {
+        return {
+          "status": "ERROR",
+          "message":
+              "Server error ${response.statusCode}: ${response.body.substring(0, response.body.length.clamp(0, 300))}",
+        };
+      }
+
+      final data = jsonDecode(response.body);
+      if (data is Map<String, dynamic>) return data;
+
+      return {
+        "status": "ERROR",
+        "message": "Unexpected response shape from worker.",
+      };
+    } catch (e) {
+      return {
+        "status": "ERROR",
+        "message": "Network error: $e",
+      };
+    }
+  }
+
+  // ── GitHub Agent — all-in-one loop (legacy / background use) ─────────────
+  //
+  // This method runs the full multi-step loop internally and returns a single
+  // GithubAgentRunResult. Use githubAgentStep for interactive UIs that want
+  // live progress logging (like StreminiAgentScreen).
+  //
   Future<GithubAgentRunResult> processGithubAgentTask({
     required String repoOwner,
     required String repoName,
     required String task,
+    String agentMode = "fix",
   }) async {
     final startedAt = DateTime.now();
     final visitedFiles = <String>[];
+    final outputFiles = <Map<String, dynamic>>[];
     final history = <Map<String, dynamic>>[];
-    const maxClientIterations = 20; // was 5 — raised to match Worker tolerance
+    const maxClientIterations = 20;
     var iteration = 0;
 
     try {
       while (true) {
-        // Client-side safety cap (Worker has its own 50-iteration guard)
         if (iteration >= maxClientIterations) {
           return GithubAgentRunResult(
             status: 'ERROR',
@@ -174,88 +237,78 @@ class ApiService {
           );
         }
 
-        final response = await http.post(
-          Uri.parse(githubAgentUrl),
-          headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-          },
-          body: jsonEncode({
-            "agentName": "stremini architect",
-            "repoOwner": repoOwner,
-            "repoName": repoName,
-            "task":
-                '$task\n\nConstraints:\n'
-                '- Do not push or deploy changes.\n'
-                '- Return corrected code only (no AI reasoning).',
-            "history": history,
-            "readFiles": visitedFiles,
-            "iteration": iteration,
-            "allowPush": false,
-            "outputFormat": "code_only",
-          }),
+        final response = await githubAgentStep(
+          repoOwner: repoOwner,
+          repoName: repoName,
+          task: task,
+          history: history,
+          visitedFiles: visitedFiles,
+          iteration: iteration,
+          outputFiles: outputFiles,
+          agentMode: agentMode,
         );
 
-        if (response.statusCode != 200) {
-          return GithubAgentRunResult(
-            status: 'ERROR',
-            summary: 'Server Error: ${response.statusCode}',
-            rawPayload: response.body,
-            visitedFiles: visitedFiles,
-            iterationCount: iteration,
-            duration: DateTime.now().difference(startedAt),
-          );
-        }
-
-        final data = jsonDecode(response.body) as Map<String, dynamic>;
-        final status = data['status']?.toString() ?? 'ERROR';
+        final status = response['status']?.toString() ?? 'ERROR';
 
         if (status == 'CONTINUE') {
-          final nextFile = data['nextFile']?.toString() ?? 'unknown file';
-          final fileContent = data['fileContent']?.toString() ?? '';
+          final nextFile = response['nextFile']?.toString() ?? '';
+          final fileContent = response['fileContent']?.toString() ?? '';
+          final action = response['action']?.toString() ?? 'read_file';
 
-          // Build history correctly — assistant message is the unique
-          // <read_file/> tag the AI produced (different for every file, so the
-          // Worker's duplicate-response guard never fires). User message is the
-          // file content so the AI has it as context on the next iteration.
-          history.addAll([
-            {
-              'role': 'assistant',
-              'content': '<read_file path="$nextFile" />',
-            },
-            {
-              'role': 'user',
-              'content': 'File content of $nextFile:\n\n$fileContent',
-            },
-          ]);
-
-          // Sync visitedFiles from Worker response (Worker is authoritative)
-          if (data['readFiles'] is List) {
+          // Sync Worker's authoritative readFiles list
+          if (response['readFiles'] is List) {
             visitedFiles
               ..clear()
-              ..addAll(List<String>.from(data['readFiles'] as List));
-          } else if (!visitedFiles.contains(nextFile)) {
+              ..addAll(List<String>.from(response['readFiles'] as List));
+          } else if (nextFile.isNotEmpty &&
+              !visitedFiles.contains(nextFile)) {
             visitedFiles.add(nextFile);
           }
 
-          // Use Worker's iteration counter as source of truth
-          iteration = data['iteration'] is int
-              ? data['iteration'] as int
+          // Sync accumulated output files from Worker
+          if (response['outputFiles'] is List) {
+            final workerOutputFiles =
+                List<Map<String, dynamic>>.from(
+                    (response['outputFiles'] as List)
+                        .map((e) => Map<String, dynamic>.from(e as Map)));
+            outputFiles
+              ..clear()
+              ..addAll(workerOutputFiles);
+          }
+
+          // Update iteration from Worker's counter
+          iteration = response['iteration'] is int
+              ? response['iteration'] as int
               : iteration + 1;
+
+          // Only add history for actual file reads (not already_read notices)
+          if (action == 'read_file' && nextFile.isNotEmpty) {
+            history.addAll([
+              {
+                'role': 'assistant',
+                'content': '<read_file path="$nextFile" />',
+              },
+              {
+                'role': 'user',
+                'content': 'File content of $nextFile:\n\n$fileContent',
+              },
+            ]);
+          }
 
           continue;
         }
 
-        // Terminal states: COMPLETED, FIXED, ERROR
+        // Terminal state
         return GithubAgentRunResult(
           status: status,
-          summary: _summaryFromResponse(data),
-          rawPayload: const JsonEncoder.withIndent('  ').convert(data),
+          summary: _summaryFromResponse(response),
+          rawPayload: const JsonEncoder.withIndent('  ').convert(response),
           visitedFiles: visitedFiles,
           iterationCount: iteration,
           duration: DateTime.now().difference(startedAt),
-          filePath: data['filePath']?.toString(),
-          pushed: data['pushed'] == true,
+          filePath: response['filePath']?.toString(),
+          pushed: response['pushed'] == true,
+          outputFiles: outputFiles,
         );
       }
     } catch (e) {
@@ -274,7 +327,8 @@ class ApiService {
     final status = data['status'];
     switch (status) {
       case 'COMPLETED':
-        final solution = _extractCodeOnly(data['solution']?.toString() ?? '');
+        final solution =
+            _extractCodeOnly(data['solution']?.toString() ?? '');
         return solution.isNotEmpty
             ? solution
             : 'No corrected code returned for status $status.';
@@ -329,7 +383,8 @@ class ApiService {
         List<String> extractedTags = [];
         if (data['taggedElements'] != null) {
           extractedTags = (data['taggedElements'] as List)
-              .map<String>((e) => e['matchedText']?.toString() ?? '')
+              .map<String>(
+                  (e) => e['matchedText']?.toString() ?? '')
               .where((s) => s.isNotEmpty)
               .toList();
         }
@@ -365,15 +420,18 @@ class ApiService {
   // Stubs
   Future<VoiceCommandResult> parseVoiceCommand(String command) async =>
       VoiceCommandResult(action: '', parameters: {});
-  Future<String> translateScreen(String content, String targetLanguage) async =>
+  Future<String> translateScreen(
+          String content, String targetLanguage) async =>
       "";
   Future<String> completeText(String incompleteText) async => "";
   Future<String> rewriteInTone(String text, String tone) async => "";
-  Future<String> translateText(String text, String targetLanguage) async => "";
+  Future<String> translateText(
+          String text, String targetLanguage) async =>
+      "";
   Future<Map<String, dynamic>> checkHealth() async => {};
 }
 
-// ── Models ────────────────────────────────────────────────────────────────────
+// ── Models ─────────────────────────────────────────────────────────────────────
 
 class SecurityScanResult {
   final bool isSafe;
@@ -405,6 +463,7 @@ class GithubAgentRunResult {
   final Duration duration;
   final String? filePath;
   final bool pushed;
+  final List<Map<String, dynamic>> outputFiles;
 
   const GithubAgentRunResult({
     required this.status,
@@ -415,6 +474,7 @@ class GithubAgentRunResult {
     required this.duration,
     this.filePath,
     this.pushed = false,
+    this.outputFiles = const [],
   });
 }
 
