@@ -633,6 +633,8 @@ class AutoTaskerOverlay(private val context: Context) {
     private val waveAnimators = mutableListOf<ValueAnimator>()
     private var isTextMode = false
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var baseBottomOffsetPx = 0
+    private val imeGapPx by lazy { dp(12) }
 
     // Callbacks
     var onCloseTapped: (() -> Unit)? = null
@@ -752,6 +754,7 @@ class AutoTaskerOverlay(private val context: Context) {
             y = dp(72)
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
+        baseBottomOffsetPx = lp.y
         params = lp
 
         val root = buildRootLayout()
@@ -1098,6 +1101,7 @@ class AutoTaskerOverlay(private val context: Context) {
         // Hide keyboard FIRST, then restore NOT_FOCUSABLE flag
         hideKeyboard()
         mainHandler.postDelayed({ setWindowFocusable(false) }, 80)
+        updateOverlayPositionForKeyboard()
         applyTabState()
     }
 
@@ -1108,8 +1112,11 @@ class AutoTaskerOverlay(private val context: Context) {
         // Update window flags first, then request focus after delay
         setWindowFocusable(true)
         mainHandler.postDelayed({
-            etTextInput?.requestFocus()
-            etTextInput?.let { imm.showSoftInput(it, InputMethodManager.SHOW_IMPLICIT) }
+            val input = etTextInput
+            if (input?.isAttachedToWindow != true) return@postDelayed
+            input.requestFocus()
+            imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            mainHandler.postDelayed({ updateOverlayPositionForKeyboard() }, 160)
         }, 120)
     }
 
@@ -1131,6 +1138,37 @@ class AutoTaskerOverlay(private val context: Context) {
             it.clearFocus()
             imm.hideSoftInputFromWindow(it.windowToken, 0)
         }
+    }
+
+    private fun updateOverlayPositionForKeyboard() {
+        val root = rootView ?: return
+        val lp = params ?: return
+        try {
+            val keyboardHeight = detectKeyboardHeight(root)
+            val targetY = if (isTextMode && keyboardHeight > 0) {
+                keyboardHeight + imeGapPx
+            } else {
+                baseBottomOffsetPx
+            }
+
+            if (lp.y != targetY) {
+                lp.y = targetY
+                wm.updateViewLayout(root, lp)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun detectKeyboardHeight(root: View): Int {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val imeInsets = root.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.ime())
+            val imeBottom = imeInsets?.bottom ?: 0
+            if (imeBottom > 0) return imeBottom
+        }
+
+        val visibleFrame = Rect()
+        root.getWindowVisibleDisplayFrame(visibleFrame)
+        val screenHeight = root.resources.displayMetrics.heightPixels
+        return (screenHeight - visibleFrame.bottom).coerceAtLeast(0)
     }
 
     private fun applyTabState() {
