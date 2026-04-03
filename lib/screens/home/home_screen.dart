@@ -401,13 +401,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             const SizedBox(width: 12),
             Expanded(
-              child: _buildModuleCard(
-                'Automation',
-                'Hands-free phone tasks',
-                Icons.bolt,
-                AppColors.scanCyan,
-                () => _handleAutomationTap(controller),
-              ),
+              child: _buildAutomationPremiumCard(controller),
             ),
           ],
         ),
@@ -550,6 +544,95 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             style: AppTextStyles.subtitle2,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAutomationPremiumCard(HomeController controller) {
+    return AppContainer(
+      padding: const EdgeInsets.all(16),
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Color(0xFF131F34),
+          Color(0xFF0D2C47),
+          Color(0xFF1A1750),
+        ],
+      ),
+      border: BorderSide(color: AppColors.scanCyan.withOpacity(0.4)),
+      onTap: () => _handleAutomationTap(controller),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.scanCyan.withOpacity(0.35),
+                      AppColors.primary.withOpacity(0.25),
+                    ],
+                  ),
+                ),
+                child: const Icon(Icons.auto_mode, color: AppColors.scanCyan),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Automation',
+                style: AppTextStyles.body2.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Premium flows with Voice + Text commands',
+            style: AppTextStyles.subtitle2.copyWith(
+              color: AppColors.white.withOpacity(0.85),
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _buildCommandChip(Icons.keyboard_voice_rounded, 'Voice'),
+              const SizedBox(width: 8),
+              _buildCommandChip(Icons.keyboard_alt_rounded, 'Text'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCommandChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.15)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: AppColors.scanCyan),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: AppTextStyles.subtitle2.copyWith(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),

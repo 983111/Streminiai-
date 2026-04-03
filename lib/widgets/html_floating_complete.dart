@@ -311,6 +311,7 @@ class HtmlStyleFloatingChat extends ConsumerStatefulWidget {
 
 class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
     with TickerProviderStateMixin {
+  static const String _streminiLogoAsset = 'lib/img/logo.jpg';
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   late AnimationController _radialController;
@@ -366,6 +367,57 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
         );
       }
     });
+  }
+
+  Future<void> _openVoiceCommandInput() async {
+    final voiceController = TextEditingController();
+    final command = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF111111),
+      isScrollControlled: true,
+      builder: (context) => Padding(
+        padding: EdgeInsets.only(
+          left: 16,
+          right: 16,
+          top: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Voice command',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: voiceController,
+              autofocus: true,
+              style: const TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                hintText: 'Say (type) your command...',
+                hintStyle: const TextStyle(color: Colors.grey),
+                filled: true,
+                fillColor: Colors.black,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+              onSubmitted: (value) => Navigator.pop(context, value),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+    final text = command?.trim() ?? '';
+    if (text.isNotEmpty) {
+      _controller.text = text;
+      _sendMessage();
+    }
   }
 
   @override
@@ -651,10 +703,13 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
             color: Colors.black,
           ),
           child: const Center(
-            child: Icon(
-              Icons.email,
-              color: Color(0xFFF5F5F5),
-              size: 36,
+            child: ClipOval(
+              child: Image(
+                image: AssetImage(_streminiLogoAsset),
+                fit: BoxFit.cover,
+                width: 40,
+                height: 40,
+              ),
             ),
           ),
         ),
@@ -962,14 +1017,17 @@ class _HtmlStyleFloatingChatState extends ConsumerState<HtmlStyleFloatingChat>
             ),
           ),
           const SizedBox(width: 8),
-          Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: Colors.grey[800],
+          GestureDetector(
+            onTap: _openVoiceCommandInput,
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.grey[800],
+              ),
+              child: const Icon(Icons.mic, color: Colors.white, size: 20),
             ),
-            child: const Icon(Icons.mic, color: Colors.white, size: 20),
           ),
         ],
       ),

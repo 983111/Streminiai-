@@ -103,8 +103,10 @@ class FloatingChatbot extends ConsumerStatefulWidget {
 }
 
 class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
+  static const String _streminiLogoAsset = 'lib/img/logo.jpg';
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  bool _voiceMode = false;
 
   @override
   void dispose() {
@@ -156,6 +158,87 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
         );
       }
     });
+  }
+
+  Future<void> _onMicTap() async {
+    setState(() => _voiceMode = !_voiceMode);
+    if (_voiceMode) {
+      await _openVoiceCommandSheet();
+    } else {
+      _controller.clear();
+    }
+  }
+
+  Future<void> _openVoiceCommandSheet() async {
+    final voiceController = TextEditingController();
+    final result = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: const Color(0xFF111111),
+      isScrollControlled: true,
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 16,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Voice command',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Type the spoken command and send.',
+                style: TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: voiceController,
+                autofocus: true,
+                style: const TextStyle(color: Colors.white),
+                decoration: InputDecoration(
+                  hintText: 'Example: open WhatsApp and send a message',
+                  hintStyle: const TextStyle(color: Colors.grey),
+                  filled: true,
+                  fillColor: Colors.black,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(context, voiceController.text),
+                  icon: const Icon(Icons.send),
+                  label: const Text('Run command'),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (!mounted) return;
+    final command = result?.trim() ?? '';
+    if (command.isNotEmpty) {
+      _controller.text = command;
+      _sendMessage();
+    } else {
+      setState(() => _voiceMode = false);
+    }
   }
 
   @override
@@ -224,7 +307,20 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
       ),
       child: Row(
         children: [
-          const Icon(Icons.smart_toy, color: Colors.blue, size: 20),
+          Container(
+            width: 24,
+            height: 24,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.blueAccent, width: 1.5),
+            ),
+            child: const ClipOval(
+              child: Image(
+                image: AssetImage(_streminiLogoAsset),
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
           const SizedBox(width: 8),
           const Text(
             'Stremini AI',
@@ -314,12 +410,12 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
       child: Row(
         children: [
           IconButton(
-            icon: const Icon(Icons.mic, color: Colors.blue, size: 20),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Voice input coming soon')),
-              );
-            },
+            icon: Icon(
+              _voiceMode ? Icons.keyboard_voice : Icons.mic_none_rounded,
+              color: _voiceMode ? Colors.lightBlueAccent : Colors.blue,
+              size: 20,
+            ),
+            onPressed: _onMicTap,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
           ),
@@ -329,7 +425,8 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
               controller: _controller,
               style: const TextStyle(color: Colors.white, fontSize: 13),
               decoration: InputDecoration(
-                hintText: 'Ask anything...',
+                hintText:
+                    _voiceMode ? 'Voice command mode...' : 'Text command...',
                 hintStyle: TextStyle(color: Colors.grey[600], fontSize: 13),
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 8),
@@ -362,7 +459,21 @@ class _FloatingChatbotState extends ConsumerState<FloatingChatbot> {
               padding: const EdgeInsets.all(16),
               child: Row(
                 children: [
-                  const Icon(Icons.smart_toy, color: Colors.blue),
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border:
+                          Border.all(color: Colors.blueAccent, width: 1.5),
+                    ),
+                    child: const ClipOval(
+                      child: Image(
+                        image: AssetImage(_streminiLogoAsset),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   const Text(
                     'Stremini AI',
