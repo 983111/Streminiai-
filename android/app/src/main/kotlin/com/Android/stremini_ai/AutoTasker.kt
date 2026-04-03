@@ -635,6 +635,18 @@ class AutoTaskerOverlay(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var baseBottomOffsetPx = 0
     private var textModeTopOffsetPx = 0
+    private val focusInputRunnable = Runnable {
+        val input = etTextInput
+        if (!isTextMode || input?.isAttachedToWindow != true) return@Runnable
+        try {
+            input.requestFocus()
+            imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            applyOverlayAnchorForMode()
+        } catch (_: Exception) {}
+    }
+    private val makeWindowNotFocusableRunnable = Runnable {
+        if (!isTextMode) setWindowFocusable(false)
+    }
 
     // Callbacks
     var onCloseTapped: (() -> Unit)? = null
@@ -666,6 +678,8 @@ class AutoTaskerOverlay(private val context: Context) {
 
     fun hide() {
         stopWaveAnimation()
+        mainHandler.removeCallbacks(focusInputRunnable)
+        mainHandler.removeCallbacks(makeWindowNotFocusableRunnable)
         rootView?.let {
             try {
                 if (isTextMode) hideKeyboard()
@@ -1053,11 +1067,7 @@ class AutoTaskerOverlay(private val context: Context) {
                 if (actionId == EditorInfo.IME_ACTION_SEND ||
                     (event?.keyCode == KeyEvent.KEYCODE_ENTER &&
                      event.action == KeyEvent.ACTION_DOWN)) {
-                    val cmd = text?.toString()?.trim().orEmpty()
-                    if (cmd.isNotBlank()) {
-                        onTextCommand?.invoke(cmd)
-                        setText("")
-                    }
+                    submitTextCommand()
                     true
                 } else false
             }
@@ -1072,11 +1082,7 @@ class AutoTaskerOverlay(private val context: Context) {
             setPadding(dp(14), dp(10), dp(14), dp(10))
             background = pill(cAccent, 0)
             setOnClickListener {
-                val cmd = et.text?.toString()?.trim().orEmpty()
-                if (cmd.isNotBlank()) {
-                    onTextCommand?.invoke(cmd)
-                    et.setText("")
-                }
+                submitTextCommand()
             }
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -1099,9 +1105,11 @@ class AutoTaskerOverlay(private val context: Context) {
     private fun switchToVoiceMode() {
         if (!isTextMode) return
         isTextMode = false
+        mainHandler.removeCallbacks(focusInputRunnable)
         // Hide keyboard FIRST, then restore NOT_FOCUSABLE flag
         hideKeyboard()
-        mainHandler.postDelayed({ setWindowFocusable(false) }, 80)
+        mainHandler.removeCallbacks(makeWindowNotFocusableRunnable)
+        mainHandler.postDelayed(makeWindowNotFocusableRunnable, 80)
         applyOverlayAnchorForMode()
         applyTabState()
     }
@@ -1109,17 +1117,13 @@ class AutoTaskerOverlay(private val context: Context) {
     private fun switchToTextMode() {
         if (isTextMode) return
         isTextMode = true
+        mainHandler.removeCallbacks(makeWindowNotFocusableRunnable)
         applyTabState()
         applyOverlayAnchorForMode()
         // Update window flags first, then request focus after delay
         setWindowFocusable(true)
-        mainHandler.postDelayed({
-            val input = etTextInput
-            if (input?.isAttachedToWindow != true) return@postDelayed
-            input.requestFocus()
-            imm.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
-            applyOverlayAnchorForMode()
-        }, 120)
+        mainHandler.removeCallbacks(focusInputRunnable)
+        mainHandler.postDelayed(focusInputRunnable, 120)
     }
 
     private fun setWindowFocusable(focusable: Boolean) {
@@ -1139,6 +1143,17 @@ class AutoTaskerOverlay(private val context: Context) {
         etTextInput?.let {
             it.clearFocus()
             imm.hideSoftInputFromWindow(it.windowToken, 0)
+        }
+    }
+
+    private fun submitTextCommand() {
+        val cmd = etTextInput?.text?.toString()?.trim().orEmpty()
+        if (cmd.isBlank()) return
+        try {
+            onTextCommand?.invoke(cmd)
+            etTextInput?.setText("")
+        } catch (t: Throwable) {
+            Log.e(TAG, "Text command dispatch failed", t)
         }
     }
 
@@ -1426,17 +1441,25 @@ class AutoTaskerService : Service() {
         isExecuting = true
 
         serviceScope.launch {
-            brain?.execute(command)
-            isExecuting = false
-            overlay?.setStopEnabled(false)
-            overlay?.setStepBadge("")
-            if (continuousMode) {
-                delay(1200)
-                overlay?.setStatus("🎤 Listening…")
-                overlay?.setMicState(true)
-                voice?.resume()
-            } else {
-                overlay?.setStatus("Done — tap mic or type to continue")
+            try {
+                brain?.execute(command)
+                isExecuting = false
+                overlay?.setStopEnabled(false)
+                overlay?.setStepBadge("")
+                if (continuousMode) {
+                    delay(1200)
+                    overlay?.setStatus("🎤 Listening…")
+                    overlay?.setMicState(true)
+                    voice?.resume()
+                } else {
+                    overlay?.setStatus("Done — tap mic or type to continue")
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "handleCommand failed", t)
+                isExecuting = false
+                overlay?.setStopEnabled(false)
+                overlay?.setStepBadge("")
+                overlay?.setStatus("❌ ${t.message ?: "Command failed"}")
             }
         }
     }
