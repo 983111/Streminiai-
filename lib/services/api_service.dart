@@ -1,18 +1,15 @@
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/config/env_config.dart';
 
 // ─── URL sanitizer (mirrors the Kotlin one) ───────────────────────────────────
 String _sanitizeError(Object e) {
   String raw = e.toString();
-  // Remove http(s) URLs
   raw = raw.replaceAll(RegExp(r'https?://[^\s,]+'), 'the server');
-  // Remove workers.dev domains
   raw = raw.replaceAll(RegExp(r'[a-zA-Z0-9._-]+\.workers\.dev[^\s,]*'), 'the server');
-  // Remove remaining domain-like patterns
   raw = raw.replaceAll(RegExp(r'[a-zA-Z0-9._-]+\.[a-zA-Z]{2,6}(:\d+)?(/[^\s]*)?'), 'the server');
-  // Remove common exception class prefixes
   raw = raw
       .replaceAll('SocketException:', 'Network error:')
       .replaceAll('ClientException:', '')
@@ -36,6 +33,23 @@ String _sanitizeError(Object e) {
 class ApiService {
   static const String baseUrl = EnvConfig.baseUrl;
   static const String githubAgentUrl = EnvConfig.githubAgentUrl;
+
+  // ── Auth helper ───────────────────────────────────────────────────────────
+  /// Returns the current user's Supabase JWT, or null if not signed in.
+  String? _getToken() {
+    return Supabase.instance.client.auth.currentSession?.accessToken;
+  }
+
+  /// Builds a header map with Content-Type, Accept, and (when available)
+  /// the Authorization bearer token.
+  Map<String, String> _headers({bool acceptStream = false}) {
+    final token = _getToken();
+    return <String, String>{
+      'Content-Type': 'application/json',
+      'Accept': acceptStream ? 'text/event-stream' : 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+    };
+  }
 
   Future<void> initSession() async {}
   Future<void> clearSession() async {}
@@ -62,12 +76,12 @@ class ApiService {
       }
       final response = await http.post(
         Uri.parse("$baseUrl/chat/message"),
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
+        headers: _headers(),
         body: jsonEncode(bodyMap),
       );
+      if (response.statusCode == 401) {
+        return "Session expired. Please sign in again.";
+      }
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data is Map) {
@@ -94,16 +108,16 @@ class ApiService {
     try {
       final response = await http.post(
         Uri.parse("$baseUrl/chat/document"),
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
+        headers: _headers(),
         body: jsonEncode({
           "documentText": documentText,
           "question": question,
           "history": history ?? [],
         }),
       );
+      if (response.statusCode == 401) {
+        return "Session expired. Please sign in again.";
+      }
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         return data['response'] ?? "Empty reply.";
@@ -123,15 +137,16 @@ class ApiService {
     try {
       final request =
           http.Request('POST', Uri.parse("$baseUrl/chat/stream"));
-      request.headers.addAll({
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-      });
+      request.headers.addAll(_headers(acceptStream: true));
       request.body = jsonEncode({
         "message": userMessage,
         "history": history ?? [],
       });
       final streamedResponse = await request.send();
+      if (streamedResponse.statusCode == 401) {
+        yield "⚠️ Session expired. Please sign in again.";
+        return;
+      }
       if (streamedResponse.statusCode == 200) {
         await for (final chunk
             in streamedResponse.stream.transform(utf8.decoder)) {
@@ -172,10 +187,7 @@ class ApiService {
     try {
       final response = await http.post(
         Uri.parse(githubAgentUrl),
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-        },
+        headers: _headers(),
         body: jsonEncode({
           "repoOwner": repoOwner,
           "repoName": repoName,
@@ -188,6 +200,13 @@ class ApiService {
           "allowPush": allowPush,
         }),
       );
+
+      if (response.statusCode == 401) {
+        return {
+          "status": "ERROR",
+          "message": "Session expired. Please sign in again.",
+        };
+      }
 
       if (response.statusCode != 200) {
         return {
@@ -333,7 +352,6 @@ class ApiService {
         );
         return fallback.isNotEmpty ? fallback : 'Corrected code generated.';
       case 'ERROR':
-        // Never show raw server error which might contain URLs
         final msg = data['message']?.toString() ?? '';
         return _sanitizeError(msg);
       default:
@@ -356,9 +374,17 @@ class ApiService {
     try {
       final response = await http.post(
         Uri.parse("$baseUrl/scan-content"),
-        headers: {"Content-Type": "application/json", "Accept": "application/json"},
+        headers: _headers(),
         body: jsonEncode({"content": content}),
       );
+      if (response.statusCode == 401) {
+        return SecurityScanResult(
+          isSafe: false,
+          riskLevel: 'error',
+          tags: [],
+          analysis: 'Session expired. Please sign in again.',
+        );
+      }
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         List<String> extractedTags = [];
@@ -375,15 +401,26 @@ class ApiService {
           analysis: data['summary'] ?? 'No analysis provided',
         );
       } else {
-        return SecurityScanResult(isSafe: false, riskLevel: 'error', tags: [], analysis: 'Scan failed. Please try again.');
+        return SecurityScanResult(
+          isSafe: false,
+          riskLevel: 'error',
+          tags: [],
+          analysis: 'Scan failed. Please try again.',
+        );
       }
     } catch (e) {
-      return SecurityScanResult(isSafe: false, riskLevel: 'error', tags: [], analysis: _sanitizeError(e));
+      return SecurityScanResult(
+        isSafe: false,
+        riskLevel: 'error',
+        tags: [],
+        analysis: _sanitizeError(e),
+      );
     }
   }
 
   // Stubs
-  Future<VoiceCommandResult> parseVoiceCommand(String command) async => VoiceCommandResult(action: '', parameters: {});
+  Future<VoiceCommandResult> parseVoiceCommand(String command) async =>
+      VoiceCommandResult(action: '', parameters: {});
   Future<String> translateScreen(String content, String targetLanguage) async => "";
   Future<String> completeText(String incompleteText) async => "";
   Future<String> rewriteInTone(String text, String tone) async => "";
@@ -399,7 +436,12 @@ class SecurityScanResult {
   final List<String> tags;
   final String analysis;
 
-  SecurityScanResult({required this.isSafe, required this.riskLevel, required this.tags, required this.analysis});
+  SecurityScanResult({
+    required this.isSafe,
+    required this.riskLevel,
+    required this.tags,
+    required this.analysis,
+  });
 }
 
 class VoiceCommandResult {
