@@ -8,6 +8,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -109,7 +111,7 @@ class ChatOverlayService : Service(), View.OnTouchListener {
 
     private val aiBackendClient = AIBackendClient()
     private lateinit var chatCommandCoordinator: ChatCommandCoordinator
-    private lateinit var bubbleController:       BubbleController
+    private lateinit var bubbleController:        BubbleController
     private lateinit var floatingChatController: FloatingChatController
     private lateinit var idleAnimationController: IdleAnimationController
 
@@ -543,7 +545,22 @@ class ChatOverlayService : Service(), View.OnTouchListener {
                 if (isUser) R.layout.message_bubble_user else R.layout.message_bubble_bot,
                 messagesContainer, false
             )
-            messageView.findViewById<TextView>(R.id.tv_message)?.text = message
+            
+            // Allow users to copy the text from the chat bubble
+            val tvMessage = messageView.findViewById<TextView>(R.id.tv_message)
+            tvMessage?.text = message
+            tvMessage?.setTextIsSelectable(true)
+            
+            // Explicitly handle long click to copy the full message, as 
+            // Action Modes for text selection can fail to render in System Overlays
+            tvMessage?.setOnLongClickListener {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("Chat Message", tvMessage.text.toString())
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this@ChatOverlayService, "Text copied to clipboard", Toast.LENGTH_SHORT).show()
+                true // Consume the long-click event
+            }
+            
             messagesContainer?.addView(messageView)
             view.findViewById<ScrollView>(R.id.scroll_messages)?.post {
                 view.findViewById<ScrollView>(R.id.scroll_messages)?.fullScroll(View.FOCUS_DOWN)
