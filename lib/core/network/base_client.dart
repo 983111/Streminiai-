@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 // Strips any URL / hostname from error messages before they surface to the user.
 String _sanitizeNetworkError(Object e) {
@@ -32,21 +33,41 @@ class BaseClient {
 
   final http.Client _httpClient;
 
+  /// Returns the current user's Supabase JWT, or null if not signed in.
+  String? _getToken() {
+    return Supabase.instance.client.auth.currentSession?.accessToken;
+  }
+
   Future<Map<String, dynamic>> postJson(
     Uri uri,
     Map<String, dynamic> body,
   ) async {
     try {
+      final token = _getToken();
+
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      };
+
+      // Attach the JWT so the backend can verify the caller's identity.
+      if (token != null) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
       final response = await _httpClient.post(
         uri,
-        headers: const {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
+        headers: headers,
         body: jsonEncode(body),
       );
 
       final dynamic decoded = response.body.isEmpty ? {} : jsonDecode(response.body);
+
+      // Surface a clean session-expired message rather than a raw 401.
+      if (response.statusCode == 401) {
+        throw Exception('Session expired. Please sign in again.');
+      }
+
       if (response.statusCode < 200 || response.statusCode >= 300) {
         // Never include URL or status code that hints at backend in error
         throw Exception('Unable to get a response. Please try again.');
